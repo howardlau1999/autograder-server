@@ -21,6 +21,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type SubmissionStatus int32
+
+const (
+	SubmissionStatus_Queued    SubmissionStatus = 0
+	SubmissionStatus_Aborted   SubmissionStatus = 1
+	SubmissionStatus_Finished  SubmissionStatus = 2
+	SubmissionStatus_Cancelled SubmissionStatus = 3
+)
+
+// Enum value maps for SubmissionStatus.
+var (
+	SubmissionStatus_name = map[int32]string{
+		0: "Queued",
+		1: "Aborted",
+		2: "Finished",
+		3: "Cancelled",
+	}
+	SubmissionStatus_value = map[string]int32{
+		"Queued":    0,
+		"Aborted":   1,
+		"Finished":  2,
+		"Cancelled": 3,
+	}
+)
+
+func (x SubmissionStatus) Enum() *SubmissionStatus {
+	p := new(SubmissionStatus)
+	*p = x
+	return p
+}
+
+func (x SubmissionStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SubmissionStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_api_proto_enumTypes[0].Descriptor()
+}
+
+func (SubmissionStatus) Type() protoreflect.EnumType {
+	return &file_proto_api_proto_enumTypes[0]
+}
+
+func (x SubmissionStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SubmissionStatus.Descriptor instead.
+func (SubmissionStatus) EnumDescriptor() ([]byte, []int) {
+	return file_proto_api_proto_rawDescGZIP(), []int{0}
+}
+
 type UploadFileRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -453,6 +505,210 @@ func (x *GetCourseListResponse) GetCourses() []*GetCourseListResponse_CourseCard
 	return nil
 }
 
+type GetAssignmentsInCourseRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	UserId   uint64 `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	CourseId uint64 `protobuf:"varint,2,opt,name=course_id,json=courseId,proto3" json:"course_id,omitempty"`
+}
+
+func (x *GetAssignmentsInCourseRequest) Reset() {
+	*x = GetAssignmentsInCourseRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_api_proto_msgTypes[8]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetAssignmentsInCourseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAssignmentsInCourseRequest) ProtoMessage() {}
+
+func (x *GetAssignmentsInCourseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_api_proto_msgTypes[8]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAssignmentsInCourseRequest.ProtoReflect.Descriptor instead.
+func (*GetAssignmentsInCourseRequest) Descriptor() ([]byte, []int) {
+	return file_proto_api_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetAssignmentsInCourseRequest) GetUserId() uint64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *GetAssignmentsInCourseRequest) GetCourseId() uint64 {
+	if x != nil {
+		return x.CourseId
+	}
+	return 0
+}
+
+type GetAssignmentsInCourseResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Assignments []*GetAssignmentsInCourseResponse_CourseAssignmentInfo `protobuf:"bytes,1,rep,name=assignments,proto3" json:"assignments,omitempty"`
+}
+
+func (x *GetAssignmentsInCourseResponse) Reset() {
+	*x = GetAssignmentsInCourseResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_api_proto_msgTypes[9]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetAssignmentsInCourseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAssignmentsInCourseResponse) ProtoMessage() {}
+
+func (x *GetAssignmentsInCourseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_api_proto_msgTypes[9]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAssignmentsInCourseResponse.ProtoReflect.Descriptor instead.
+func (*GetAssignmentsInCourseResponse) Descriptor() ([]byte, []int) {
+	return file_proto_api_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *GetAssignmentsInCourseResponse) GetAssignments() []*GetAssignmentsInCourseResponse_CourseAssignmentInfo {
+	if x != nil {
+		return x.Assignments
+	}
+	return nil
+}
+
+type GetSubmissionsInAssignmentRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	UserId       uint64 `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	AssignmentId uint64 `protobuf:"varint,2,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
+}
+
+func (x *GetSubmissionsInAssignmentRequest) Reset() {
+	*x = GetSubmissionsInAssignmentRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_api_proto_msgTypes[10]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetSubmissionsInAssignmentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSubmissionsInAssignmentRequest) ProtoMessage() {}
+
+func (x *GetSubmissionsInAssignmentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_api_proto_msgTypes[10]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSubmissionsInAssignmentRequest.ProtoReflect.Descriptor instead.
+func (*GetSubmissionsInAssignmentRequest) Descriptor() ([]byte, []int) {
+	return file_proto_api_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GetSubmissionsInAssignmentRequest) GetUserId() uint64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *GetSubmissionsInAssignmentRequest) GetAssignmentId() uint64 {
+	if x != nil {
+		return x.AssignmentId
+	}
+	return 0
+}
+
+type GetSubmissionsInAssignmentResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Submissions []*GetSubmissionsInAssignmentResponse_SubmissionInfo `protobuf:"bytes,1,rep,name=submissions,proto3" json:"submissions,omitempty"`
+}
+
+func (x *GetSubmissionsInAssignmentResponse) Reset() {
+	*x = GetSubmissionsInAssignmentResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_api_proto_msgTypes[11]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetSubmissionsInAssignmentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSubmissionsInAssignmentResponse) ProtoMessage() {}
+
+func (x *GetSubmissionsInAssignmentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_api_proto_msgTypes[11]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSubmissionsInAssignmentResponse.ProtoReflect.Descriptor instead.
+func (*GetSubmissionsInAssignmentResponse) Descriptor() ([]byte, []int) {
+	return file_proto_api_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GetSubmissionsInAssignmentResponse) GetSubmissions() []*GetSubmissionsInAssignmentResponse_SubmissionInfo {
+	if x != nil {
+		return x.Submissions
+	}
+	return nil
+}
+
 type GetCourseListResponse_CourseCardInfo struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -465,7 +721,7 @@ type GetCourseListResponse_CourseCardInfo struct {
 func (x *GetCourseListResponse_CourseCardInfo) Reset() {
 	*x = GetCourseListResponse_CourseCardInfo{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_api_proto_msgTypes[8]
+		mi := &file_proto_api_proto_msgTypes[12]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -478,7 +734,7 @@ func (x *GetCourseListResponse_CourseCardInfo) String() string {
 func (*GetCourseListResponse_CourseCardInfo) ProtoMessage() {}
 
 func (x *GetCourseListResponse_CourseCardInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_api_proto_msgTypes[8]
+	mi := &file_proto_api_proto_msgTypes[12]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -504,6 +760,227 @@ func (x *GetCourseListResponse_CourseCardInfo) GetName() string {
 func (x *GetCourseListResponse_CourseCardInfo) GetShortName() string {
 	if x != nil {
 		return x.ShortName
+	}
+	return ""
+}
+
+type GetAssignmentsInCourseResponse_CourseAssignmentInfo struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	AssignmentId uint64                 `protobuf:"varint,1,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
+	Name         string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	ReleaseDate  *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=release_date,json=releaseDate,proto3" json:"release_date,omitempty"`
+	DueDate      *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=due_date,json=dueDate,proto3" json:"due_date,omitempty"`
+	Submitted    bool                   `protobuf:"varint,5,opt,name=submitted,proto3" json:"submitted,omitempty"`
+}
+
+func (x *GetAssignmentsInCourseResponse_CourseAssignmentInfo) Reset() {
+	*x = GetAssignmentsInCourseResponse_CourseAssignmentInfo{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_api_proto_msgTypes[13]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetAssignmentsInCourseResponse_CourseAssignmentInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAssignmentsInCourseResponse_CourseAssignmentInfo) ProtoMessage() {}
+
+func (x *GetAssignmentsInCourseResponse_CourseAssignmentInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_api_proto_msgTypes[13]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAssignmentsInCourseResponse_CourseAssignmentInfo.ProtoReflect.Descriptor instead.
+func (*GetAssignmentsInCourseResponse_CourseAssignmentInfo) Descriptor() ([]byte, []int) {
+	return file_proto_api_proto_rawDescGZIP(), []int{9, 0}
+}
+
+func (x *GetAssignmentsInCourseResponse_CourseAssignmentInfo) GetAssignmentId() uint64 {
+	if x != nil {
+		return x.AssignmentId
+	}
+	return 0
+}
+
+func (x *GetAssignmentsInCourseResponse_CourseAssignmentInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GetAssignmentsInCourseResponse_CourseAssignmentInfo) GetReleaseDate() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ReleaseDate
+	}
+	return nil
+}
+
+func (x *GetAssignmentsInCourseResponse_CourseAssignmentInfo) GetDueDate() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DueDate
+	}
+	return nil
+}
+
+func (x *GetAssignmentsInCourseResponse_CourseAssignmentInfo) GetSubmitted() bool {
+	if x != nil {
+		return x.Submitted
+	}
+	return false
+}
+
+type GetSubmissionsInAssignmentResponse_SubmissionInfo struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SubmissionId uint64                                                         `protobuf:"varint,1,opt,name=submission_id,json=submissionId,proto3" json:"submission_id,omitempty"`
+	SubmittedAt  *timestamppb.Timestamp                                         `protobuf:"bytes,2,opt,name=submitted_at,json=submittedAt,proto3" json:"submitted_at,omitempty"`
+	Submitters   []*GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter `protobuf:"bytes,3,rep,name=submitters,proto3" json:"submitters,omitempty"`
+	Score        uint64                                                         `protobuf:"varint,4,opt,name=score,proto3" json:"score,omitempty"`
+	MaxScore     uint64                                                         `protobuf:"varint,5,opt,name=max_score,json=maxScore,proto3" json:"max_score,omitempty"`
+	Status       SubmissionStatus                                               `protobuf:"varint,6,opt,name=status,proto3,enum=SubmissionStatus" json:"status,omitempty"`
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo) Reset() {
+	*x = GetSubmissionsInAssignmentResponse_SubmissionInfo{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_api_proto_msgTypes[14]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSubmissionsInAssignmentResponse_SubmissionInfo) ProtoMessage() {}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_api_proto_msgTypes[14]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSubmissionsInAssignmentResponse_SubmissionInfo.ProtoReflect.Descriptor instead.
+func (*GetSubmissionsInAssignmentResponse_SubmissionInfo) Descriptor() ([]byte, []int) {
+	return file_proto_api_proto_rawDescGZIP(), []int{11, 0}
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo) GetSubmissionId() uint64 {
+	if x != nil {
+		return x.SubmissionId
+	}
+	return 0
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo) GetSubmittedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.SubmittedAt
+	}
+	return nil
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo) GetSubmitters() []*GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter {
+	if x != nil {
+		return x.Submitters
+	}
+	return nil
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo) GetScore() uint64 {
+	if x != nil {
+		return x.Score
+	}
+	return 0
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo) GetMaxScore() uint64 {
+	if x != nil {
+		return x.MaxScore
+	}
+	return 0
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo) GetStatus() SubmissionStatus {
+	if x != nil {
+		return x.Status
+	}
+	return SubmissionStatus_Queued
+}
+
+type GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	UserId   uint64 `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Username string `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter) Reset() {
+	*x = GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_api_proto_msgTypes[15]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter) ProtoMessage() {}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_api_proto_msgTypes[15]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter.ProtoReflect.Descriptor instead.
+func (*GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter) Descriptor() ([]byte, []int) {
+	return file_proto_api_proto_rawDescGZIP(), []int{11, 0, 0}
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter) GetUserId() uint64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter) GetUsername() string {
+	if x != nil {
+		return x.Username
 	}
 	return ""
 }
@@ -558,17 +1035,98 @@ var file_proto_api_proto_rawDesc = []byte{
 	0x75, 0x72, 0x73, 0x65, 0x43, 0x61, 0x72, 0x64, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x12, 0x0a, 0x04,
 	0x6e, 0x61, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6e, 0x61, 0x6d, 0x65,
 	0x12, 0x1d, 0x0a, 0x0a, 0x73, 0x68, 0x6f, 0x72, 0x74, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02,
-	0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x68, 0x6f, 0x72, 0x74, 0x4e, 0x61, 0x6d, 0x65, 0x32,
-	0x7b, 0x0a, 0x11, 0x41, 0x75, 0x74, 0x6f, 0x67, 0x72, 0x61, 0x64, 0x65, 0x72, 0x53, 0x65, 0x72,
-	0x76, 0x69, 0x63, 0x65, 0x12, 0x26, 0x0a, 0x05, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x12, 0x0d, 0x2e,
-	0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x0e, 0x2e, 0x4c,
-	0x6f, 0x67, 0x69, 0x6e, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x3e, 0x0a, 0x0d,
-	0x47, 0x65, 0x74, 0x43, 0x6f, 0x75, 0x72, 0x73, 0x65, 0x4c, 0x69, 0x73, 0x74, 0x12, 0x15, 0x2e,
-	0x47, 0x65, 0x74, 0x43, 0x6f, 0x75, 0x72, 0x73, 0x65, 0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x71,
-	0x75, 0x65, 0x73, 0x74, 0x1a, 0x16, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x75, 0x72, 0x73, 0x65,
-	0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x42, 0x0f, 0x5a, 0x0d,
-	0x70, 0x6b, 0x67, 0x2f, 0x61, 0x70, 0x69, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70,
-	0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x68, 0x6f, 0x72, 0x74, 0x4e, 0x61, 0x6d, 0x65, 0x22,
+	0x55, 0x0a, 0x1d, 0x47, 0x65, 0x74, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74,
+	0x73, 0x49, 0x6e, 0x43, 0x6f, 0x75, 0x72, 0x73, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x12, 0x17, 0x0a, 0x07, 0x75, 0x73, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28,
+	0x04, 0x52, 0x06, 0x75, 0x73, 0x65, 0x72, 0x49, 0x64, 0x12, 0x1b, 0x0a, 0x09, 0x63, 0x6f, 0x75,
+	0x72, 0x73, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x04, 0x52, 0x08, 0x63, 0x6f,
+	0x75, 0x72, 0x73, 0x65, 0x49, 0x64, 0x22, 0xde, 0x02, 0x0a, 0x1e, 0x47, 0x65, 0x74, 0x41, 0x73,
+	0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x49, 0x6e, 0x43, 0x6f, 0x75, 0x72, 0x73,
+	0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x56, 0x0a, 0x0b, 0x61, 0x73, 0x73,
+	0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x34,
+	0x2e, 0x47, 0x65, 0x74, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x49,
+	0x6e, 0x43, 0x6f, 0x75, 0x72, 0x73, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x2e,
+	0x43, 0x6f, 0x75, 0x72, 0x73, 0x65, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74,
+	0x49, 0x6e, 0x66, 0x6f, 0x52, 0x0b, 0x61, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74,
+	0x73, 0x1a, 0xe3, 0x01, 0x0a, 0x14, 0x43, 0x6f, 0x75, 0x72, 0x73, 0x65, 0x41, 0x73, 0x73, 0x69,
+	0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x23, 0x0a, 0x0d, 0x61, 0x73,
+	0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28,
+	0x04, 0x52, 0x0c, 0x61, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x49, 0x64, 0x12,
+	0x12, 0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6e,
+	0x61, 0x6d, 0x65, 0x12, 0x3d, 0x0a, 0x0c, 0x72, 0x65, 0x6c, 0x65, 0x61, 0x73, 0x65, 0x5f, 0x64,
+	0x61, 0x74, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67,
+	0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65,
+	0x73, 0x74, 0x61, 0x6d, 0x70, 0x52, 0x0b, 0x72, 0x65, 0x6c, 0x65, 0x61, 0x73, 0x65, 0x44, 0x61,
+	0x74, 0x65, 0x12, 0x35, 0x0a, 0x08, 0x64, 0x75, 0x65, 0x5f, 0x64, 0x61, 0x74, 0x65, 0x18, 0x04,
+	0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72,
+	0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70,
+	0x52, 0x07, 0x64, 0x75, 0x65, 0x44, 0x61, 0x74, 0x65, 0x12, 0x1c, 0x0a, 0x09, 0x73, 0x75, 0x62,
+	0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x18, 0x05, 0x20, 0x01, 0x28, 0x08, 0x52, 0x09, 0x73, 0x75,
+	0x62, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x22, 0x61, 0x0a, 0x21, 0x47, 0x65, 0x74, 0x53, 0x75,
+	0x62, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x73, 0x49, 0x6e, 0x41, 0x73, 0x73, 0x69, 0x67,
+	0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x17, 0x0a, 0x07,
+	0x75, 0x73, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x04, 0x52, 0x06, 0x75,
+	0x73, 0x65, 0x72, 0x49, 0x64, 0x12, 0x23, 0x0a, 0x0d, 0x61, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d,
+	0x65, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0c, 0x61, 0x73,
+	0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x49, 0x64, 0x22, 0xef, 0x03, 0x0a, 0x22, 0x47,
+	0x65, 0x74, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x73, 0x49, 0x6e, 0x41,
+	0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x12, 0x54, 0x0a, 0x0b, 0x73, 0x75, 0x62, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x73,
+	0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x32, 0x2e, 0x47, 0x65, 0x74, 0x53, 0x75, 0x62, 0x6d,
+	0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x73, 0x49, 0x6e, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d,
+	0x65, 0x6e, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x2e, 0x53, 0x75, 0x62, 0x6d,
+	0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x0b, 0x73, 0x75, 0x62, 0x6d,
+	0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x73, 0x1a, 0xf2, 0x02, 0x0a, 0x0e, 0x53, 0x75, 0x62, 0x6d,
+	0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x23, 0x0a, 0x0d, 0x73, 0x75,
+	0x62, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28,
+	0x04, 0x52, 0x0c, 0x73, 0x75, 0x62, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x49, 0x64, 0x12,
+	0x3d, 0x0a, 0x0c, 0x73, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18,
+	0x02, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70,
+	0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d,
+	0x70, 0x52, 0x0b, 0x73, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x41, 0x74, 0x12, 0x5c,
+	0x0a, 0x0a, 0x73, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x72, 0x73, 0x18, 0x03, 0x20, 0x03,
+	0x28, 0x0b, 0x32, 0x3c, 0x2e, 0x47, 0x65, 0x74, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x73, 0x73, 0x69,
+	0x6f, 0x6e, 0x73, 0x49, 0x6e, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x2e, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x73, 0x73, 0x69,
+	0x6f, 0x6e, 0x49, 0x6e, 0x66, 0x6f, 0x2e, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x72,
+	0x52, 0x0a, 0x73, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x72, 0x73, 0x12, 0x14, 0x0a, 0x05,
+	0x73, 0x63, 0x6f, 0x72, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x04, 0x52, 0x05, 0x73, 0x63, 0x6f,
+	0x72, 0x65, 0x12, 0x1b, 0x0a, 0x09, 0x6d, 0x61, 0x78, 0x5f, 0x73, 0x63, 0x6f, 0x72, 0x65, 0x18,
+	0x05, 0x20, 0x01, 0x28, 0x04, 0x52, 0x08, 0x6d, 0x61, 0x78, 0x53, 0x63, 0x6f, 0x72, 0x65, 0x12,
+	0x29, 0x0a, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0e, 0x32,
+	0x11, 0x2e, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x53, 0x74, 0x61, 0x74,
+	0x75, 0x73, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x1a, 0x40, 0x0a, 0x09, 0x53, 0x75,
+	0x62, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x72, 0x12, 0x17, 0x0a, 0x07, 0x75, 0x73, 0x65, 0x72, 0x5f,
+	0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x04, 0x52, 0x06, 0x75, 0x73, 0x65, 0x72, 0x49, 0x64,
+	0x12, 0x1a, 0x0a, 0x08, 0x75, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x08, 0x75, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x2a, 0x48, 0x0a, 0x10,
+	0x53, 0x75, 0x62, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73,
+	0x12, 0x0a, 0x0a, 0x06, 0x51, 0x75, 0x65, 0x75, 0x65, 0x64, 0x10, 0x00, 0x12, 0x0b, 0x0a, 0x07,
+	0x41, 0x62, 0x6f, 0x72, 0x74, 0x65, 0x64, 0x10, 0x01, 0x12, 0x0c, 0x0a, 0x08, 0x46, 0x69, 0x6e,
+	0x69, 0x73, 0x68, 0x65, 0x64, 0x10, 0x02, 0x12, 0x0d, 0x0a, 0x09, 0x43, 0x61, 0x6e, 0x63, 0x65,
+	0x6c, 0x6c, 0x65, 0x64, 0x10, 0x03, 0x32, 0xbd, 0x02, 0x0a, 0x11, 0x41, 0x75, 0x74, 0x6f, 0x67,
+	0x72, 0x61, 0x64, 0x65, 0x72, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x26, 0x0a, 0x05,
+	0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x12, 0x0d, 0x2e, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x0e, 0x2e, 0x4c, 0x6f, 0x67, 0x69, 0x6e, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x3e, 0x0a, 0x0d, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x75, 0x72, 0x73,
+	0x65, 0x4c, 0x69, 0x73, 0x74, 0x12, 0x15, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x75, 0x72, 0x73,
+	0x65, 0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x16, 0x2e, 0x47,
+	0x65, 0x74, 0x43, 0x6f, 0x75, 0x72, 0x73, 0x65, 0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x59, 0x0a, 0x16, 0x47, 0x65, 0x74, 0x41, 0x73, 0x73, 0x69, 0x67,
+	0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x49, 0x6e, 0x43, 0x6f, 0x75, 0x72, 0x73, 0x65, 0x12, 0x1e,
+	0x2e, 0x47, 0x65, 0x74, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x49,
+	0x6e, 0x43, 0x6f, 0x75, 0x72, 0x73, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1f,
+	0x2e, 0x47, 0x65, 0x74, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x49,
+	0x6e, 0x43, 0x6f, 0x75, 0x72, 0x73, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
+	0x65, 0x0a, 0x1a, 0x47, 0x65, 0x74, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e,
+	0x73, 0x49, 0x6e, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x12, 0x22, 0x2e,
+	0x47, 0x65, 0x74, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x73, 0x49, 0x6e,
+	0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x23, 0x2e, 0x47, 0x65, 0x74, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6f,
+	0x6e, 0x73, 0x49, 0x6e, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x52, 0x65,
+	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x42, 0x0f, 0x5a, 0x0d, 0x70, 0x6b, 0x67, 0x2f, 0x61, 0x70,
+	0x69, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -583,31 +1141,51 @@ func file_proto_api_proto_rawDescGZIP() []byte {
 	return file_proto_api_proto_rawDescData
 }
 
-var file_proto_api_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_proto_api_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_proto_api_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_proto_api_proto_goTypes = []interface{}{
-	(*UploadFileRequest)(nil),                    // 0: UploadFileRequest
-	(*UploadFileResponse)(nil),                   // 1: UploadFileResponse
-	(*UploadChunkRequest)(nil),                   // 2: UploadChunkRequest
-	(*UploadChunkResponse)(nil),                  // 3: UploadChunkResponse
-	(*LoginRequest)(nil),                         // 4: LoginRequest
-	(*LoginResponse)(nil),                        // 5: LoginResponse
-	(*GetCourseListRequest)(nil),                 // 6: GetCourseListRequest
-	(*GetCourseListResponse)(nil),                // 7: GetCourseListResponse
-	(*GetCourseListResponse_CourseCardInfo)(nil), // 8: GetCourseListResponse.CourseCardInfo
-	(*timestamppb.Timestamp)(nil),                // 9: google.protobuf.Timestamp
+	(SubmissionStatus)(0),                                               // 0: SubmissionStatus
+	(*UploadFileRequest)(nil),                                           // 1: UploadFileRequest
+	(*UploadFileResponse)(nil),                                          // 2: UploadFileResponse
+	(*UploadChunkRequest)(nil),                                          // 3: UploadChunkRequest
+	(*UploadChunkResponse)(nil),                                         // 4: UploadChunkResponse
+	(*LoginRequest)(nil),                                                // 5: LoginRequest
+	(*LoginResponse)(nil),                                               // 6: LoginResponse
+	(*GetCourseListRequest)(nil),                                        // 7: GetCourseListRequest
+	(*GetCourseListResponse)(nil),                                       // 8: GetCourseListResponse
+	(*GetAssignmentsInCourseRequest)(nil),                               // 9: GetAssignmentsInCourseRequest
+	(*GetAssignmentsInCourseResponse)(nil),                              // 10: GetAssignmentsInCourseResponse
+	(*GetSubmissionsInAssignmentRequest)(nil),                           // 11: GetSubmissionsInAssignmentRequest
+	(*GetSubmissionsInAssignmentResponse)(nil),                          // 12: GetSubmissionsInAssignmentResponse
+	(*GetCourseListResponse_CourseCardInfo)(nil),                        // 13: GetCourseListResponse.CourseCardInfo
+	(*GetAssignmentsInCourseResponse_CourseAssignmentInfo)(nil),         // 14: GetAssignmentsInCourseResponse.CourseAssignmentInfo
+	(*GetSubmissionsInAssignmentResponse_SubmissionInfo)(nil),           // 15: GetSubmissionsInAssignmentResponse.SubmissionInfo
+	(*GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter)(nil), // 16: GetSubmissionsInAssignmentResponse.SubmissionInfo.Submitter
+	(*timestamppb.Timestamp)(nil),                                       // 17: google.protobuf.Timestamp
 }
 var file_proto_api_proto_depIdxs = []int32{
-	9, // 0: LoginResponse.expire_at:type_name -> google.protobuf.Timestamp
-	8, // 1: GetCourseListResponse.courses:type_name -> GetCourseListResponse.CourseCardInfo
-	4, // 2: AutograderService.Login:input_type -> LoginRequest
-	6, // 3: AutograderService.GetCourseList:input_type -> GetCourseListRequest
-	5, // 4: AutograderService.Login:output_type -> LoginResponse
-	7, // 5: AutograderService.GetCourseList:output_type -> GetCourseListResponse
-	4, // [4:6] is the sub-list for method output_type
-	2, // [2:4] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	17, // 0: LoginResponse.expire_at:type_name -> google.protobuf.Timestamp
+	13, // 1: GetCourseListResponse.courses:type_name -> GetCourseListResponse.CourseCardInfo
+	14, // 2: GetAssignmentsInCourseResponse.assignments:type_name -> GetAssignmentsInCourseResponse.CourseAssignmentInfo
+	15, // 3: GetSubmissionsInAssignmentResponse.submissions:type_name -> GetSubmissionsInAssignmentResponse.SubmissionInfo
+	17, // 4: GetAssignmentsInCourseResponse.CourseAssignmentInfo.release_date:type_name -> google.protobuf.Timestamp
+	17, // 5: GetAssignmentsInCourseResponse.CourseAssignmentInfo.due_date:type_name -> google.protobuf.Timestamp
+	17, // 6: GetSubmissionsInAssignmentResponse.SubmissionInfo.submitted_at:type_name -> google.protobuf.Timestamp
+	16, // 7: GetSubmissionsInAssignmentResponse.SubmissionInfo.submitters:type_name -> GetSubmissionsInAssignmentResponse.SubmissionInfo.Submitter
+	0,  // 8: GetSubmissionsInAssignmentResponse.SubmissionInfo.status:type_name -> SubmissionStatus
+	5,  // 9: AutograderService.Login:input_type -> LoginRequest
+	7,  // 10: AutograderService.GetCourseList:input_type -> GetCourseListRequest
+	9,  // 11: AutograderService.GetAssignmentsInCourse:input_type -> GetAssignmentsInCourseRequest
+	11, // 12: AutograderService.GetSubmissionsInAssignment:input_type -> GetSubmissionsInAssignmentRequest
+	6,  // 13: AutograderService.Login:output_type -> LoginResponse
+	8,  // 14: AutograderService.GetCourseList:output_type -> GetCourseListResponse
+	10, // 15: AutograderService.GetAssignmentsInCourse:output_type -> GetAssignmentsInCourseResponse
+	12, // 16: AutograderService.GetSubmissionsInAssignment:output_type -> GetSubmissionsInAssignmentResponse
+	13, // [13:17] is the sub-list for method output_type
+	9,  // [9:13] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_proto_api_proto_init() }
@@ -713,7 +1291,91 @@ func file_proto_api_proto_init() {
 			}
 		}
 		file_proto_api_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetAssignmentsInCourseRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_api_proto_msgTypes[9].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetAssignmentsInCourseResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_api_proto_msgTypes[10].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetSubmissionsInAssignmentRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_api_proto_msgTypes[11].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetSubmissionsInAssignmentResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_api_proto_msgTypes[12].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetCourseListResponse_CourseCardInfo); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_api_proto_msgTypes[13].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetAssignmentsInCourseResponse_CourseAssignmentInfo); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_api_proto_msgTypes[14].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetSubmissionsInAssignmentResponse_SubmissionInfo); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_api_proto_msgTypes[15].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -730,13 +1392,14 @@ func file_proto_api_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_proto_api_proto_rawDesc,
-			NumEnums:      0,
-			NumMessages:   9,
+			NumEnums:      1,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_proto_api_proto_goTypes,
 		DependencyIndexes: file_proto_api_proto_depIdxs,
+		EnumInfos:         file_proto_api_proto_enumTypes,
 		MessageInfos:      file_proto_api_proto_msgTypes,
 	}.Build()
 	File_proto_api_proto = out.File

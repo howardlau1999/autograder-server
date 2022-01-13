@@ -46,7 +46,53 @@ message GetCourseListResponse {
   repeated CourseCardInfo courses = 2;
 }
 
+message GetAssignmentsInCourseRequest {
+  uint64 user_id = 1;
+  uint64 course_id = 2;
+}
+
+message GetAssignmentsInCourseResponse {
+  message CourseAssignmentInfo {
+    uint64 assignment_id = 1;
+    string name = 2;
+    google.protobuf.Timestamp release_date = 3;
+    google.protobuf.Timestamp due_date = 4;
+    bool submitted = 5;
+  }
+  repeated CourseAssignmentInfo assignments = 1;
+}
+
+message GetSubmissionsInAssignmentRequest {
+  uint64 user_id = 1;
+  uint64 assignment_id = 2;
+}
+
+enum SubmissionStatus {
+  Queued = 0;
+  Aborted = 1;
+  Finished = 2;
+  Cancelled = 3;
+}
+
+message GetSubmissionsInAssignmentResponse {
+  message SubmissionInfo {
+    uint64 submission_id = 1;
+    google.protobuf.Timestamp submitted_at = 2;
+    message Submitter {
+      uint64 user_id = 1;
+      string username = 2;
+    }
+    repeated Submitter submitters = 3;
+    uint64 score = 4;
+    uint64 max_score = 5;
+    SubmissionStatus status = 6;
+  }
+  repeated SubmissionInfo submissions = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
+   rpc GetAssignmentsInCourse(GetAssignmentsInCourseRequest) returns (GetAssignmentsInCourseResponse);
+   rpc GetSubmissionsInAssignment(GetSubmissionsInAssignmentRequest) returns (GetSubmissionsInAssignmentResponse);
 }

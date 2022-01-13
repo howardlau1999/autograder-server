@@ -3,10 +3,52 @@ package pkg
 import (
 	autograder_pb "autograder-server/pkg/api/proto"
 	"context"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type AutograderService struct {
 	autograder_pb.UnimplementedAutograderServiceServer
+}
+
+func (a AutograderService) GetSubmissionsInAssignment(ctx context.Context, request *autograder_pb.GetSubmissionsInAssignmentRequest) (*autograder_pb.GetSubmissionsInAssignmentResponse, error) {
+	submitters := []*autograder_pb.GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter{
+		{
+			UserId:   1,
+			Username: "root",
+		}, {
+			UserId:   2,
+			Username: "howard",
+		},
+	}
+	response := &autograder_pb.GetSubmissionsInAssignmentResponse{
+		Submissions: []*autograder_pb.GetSubmissionsInAssignmentResponse_SubmissionInfo{
+			{
+				SubmissionId: 1,
+				SubmittedAt:  timestamppb.Now(),
+				Submitters:   submitters,
+				Score:        20,
+				MaxScore:     100,
+			},
+			{
+				SubmissionId: 2,
+				SubmittedAt:  timestamppb.Now(),
+				Submitters:   submitters,
+				Score:        80,
+				MaxScore:     100,
+			},
+		},
+	}
+	return response, nil
+}
+
+func (a AutograderService) GetAssignmentsInCourse(ctx context.Context, request *autograder_pb.GetAssignmentsInCourseRequest) (*autograder_pb.GetAssignmentsInCourseResponse, error) {
+	response := &autograder_pb.GetAssignmentsInCourseResponse{
+		Assignments: []*autograder_pb.GetAssignmentsInCourseResponse_CourseAssignmentInfo{
+			{AssignmentId: 1, Name: "单周期 CPU", ReleaseDate: timestamppb.Now(), DueDate: timestamppb.Now(), Submitted: true},
+			{AssignmentId: 2, Name: "多周期 CPU", ReleaseDate: timestamppb.Now(), DueDate: timestamppb.Now(), Submitted: false},
+		},
+	}
+	return response, nil
 }
 
 func (a AutograderService) GetCourseList(ctx context.Context, request *autograder_pb.GetCourseListRequest) (*autograder_pb.GetCourseListResponse, error) {

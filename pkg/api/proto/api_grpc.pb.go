@@ -24,6 +24,8 @@ const _ = grpc.SupportPackageIsVersion7
 type AutograderServiceClient interface {
 	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginResponse, error)
 	GetCourseList(ctx context.Context, in *GetCourseListRequest, opts ...grpc.CallOption) (*GetCourseListResponse, error)
+	GetAssignmentsInCourse(ctx context.Context, in *GetAssignmentsInCourseRequest, opts ...grpc.CallOption) (*GetAssignmentsInCourseResponse, error)
+	GetSubmissionsInAssignment(ctx context.Context, in *GetSubmissionsInAssignmentRequest, opts ...grpc.CallOption) (*GetSubmissionsInAssignmentResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -52,12 +54,32 @@ func (c *autograderServiceClient) GetCourseList(ctx context.Context, in *GetCour
 	return out, nil
 }
 
+func (c *autograderServiceClient) GetAssignmentsInCourse(ctx context.Context, in *GetAssignmentsInCourseRequest, opts ...grpc.CallOption) (*GetAssignmentsInCourseResponse, error) {
+	out := new(GetAssignmentsInCourseResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GetAssignmentsInCourse", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) GetSubmissionsInAssignment(ctx context.Context, in *GetSubmissionsInAssignmentRequest, opts ...grpc.CallOption) (*GetSubmissionsInAssignmentResponse, error) {
+	out := new(GetSubmissionsInAssignmentResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GetSubmissionsInAssignment", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
 type AutograderServiceServer interface {
 	Login(context.Context, *LoginRequest) (*LoginResponse, error)
 	GetCourseList(context.Context, *GetCourseListRequest) (*GetCourseListResponse, error)
+	GetAssignmentsInCourse(context.Context, *GetAssignmentsInCourseRequest) (*GetAssignmentsInCourseResponse, error)
+	GetSubmissionsInAssignment(context.Context, *GetSubmissionsInAssignmentRequest) (*GetSubmissionsInAssignmentResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -70,6 +92,12 @@ func (UnimplementedAutograderServiceServer) Login(context.Context, *LoginRequest
 }
 func (UnimplementedAutograderServiceServer) GetCourseList(context.Context, *GetCourseListRequest) (*GetCourseListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCourseList not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetAssignmentsInCourse(context.Context, *GetAssignmentsInCourseRequest) (*GetAssignmentsInCourseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAssignmentsInCourse not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetSubmissionsInAssignment(context.Context, *GetSubmissionsInAssignmentRequest) (*GetSubmissionsInAssignmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSubmissionsInAssignment not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -120,6 +148,42 @@ func _AutograderService_GetCourseList_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_GetAssignmentsInCourse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAssignmentsInCourseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GetAssignmentsInCourse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GetAssignmentsInCourse",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GetAssignmentsInCourse(ctx, req.(*GetAssignmentsInCourseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_GetSubmissionsInAssignment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSubmissionsInAssignmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GetSubmissionsInAssignment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GetSubmissionsInAssignment",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GetSubmissionsInAssignment(ctx, req.(*GetSubmissionsInAssignmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -134,6 +198,14 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCourseList",
 			Handler:    _AutograderService_GetCourseList_Handler,
+		},
+		{
+			MethodName: "GetAssignmentsInCourse",
+			Handler:    _AutograderService_GetAssignmentsInCourse_Handler,
+		},
+		{
+			MethodName: "GetSubmissionsInAssignment",
+			Handler:    _AutograderService_GetSubmissionsInAssignment_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
