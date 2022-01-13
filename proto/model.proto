@@ -1,0 +1,102 @@
+syntax = "proto3";
+option go_package = "pkg/model/proto";
+
+import "google/protobuf/timestamp.proto";
+
+message User {
+  string username = 1;
+  string password = 2;
+  string email = 3;
+  string github_id = 4;
+}
+
+enum CourseRole {
+  Student = 0;
+  TA = 1;
+  Instructor = 2;
+  Reader = 3;
+}
+
+message CourseMember {
+  uint64 user_id = 1;
+  CourseRole role = 2;
+}
+
+message CourseGroup {
+  repeated uint64 user_id = 1;
+}
+
+message Course {
+  string name = 1;
+  string short_name = 2;
+  string term = 3;
+  string description = 4;
+  repeated uint64 assignments = 5;
+}
+
+message RubricItem {
+  string id = 1;
+  uint64 score = 2;
+}
+
+message ProgrammingAssignmentConfig {
+  string image = 1;
+  uint64 full_score = 2;
+}
+
+enum AssignmentType {
+  Programming = 0;
+}
+
+message Assignment {
+  string name = 1;
+  uint64 course_id = 2;
+  AssignmentType asgn_type = 3;
+  google.protobuf.Timestamp release_date = 4;
+  google.protobuf.Timestamp due_date = 5;
+  google.protobuf.Timestamp late_due_date = 6;
+  ProgrammingAssignmentConfig programming_config = 8;
+  bool published = 9;
+}
+
+enum TestcaseVisibility {
+  Visible = 0;
+  Hidden = 1;
+  AfterDueDate = 2;
+  AfterPublished = 3;
+}
+
+message LeaderboardItem {
+  string name = 1;
+  string value = 2;
+  string order = 3;
+}
+
+message SubmissionReportTestcase {
+  uint64 score = 1;
+  uint64 max_score = 2;
+  string name = 3;
+  uint64 order = 4;
+  repeated string tags = 5;
+  string output = 6;
+  string output_path = 7;
+}
+
+message SubmissionReport {
+  uint64 submission_id = 1;
+  uint64 score = 2;
+  uint64 execution_time = 3;
+  string output = 4;
+  string output_path = 5;
+  TestcaseVisibility visibility = 6;
+  TestcaseVisibility stdout_visibility = 7;
+  repeated SubmissionReportTestcase tests = 8;
+  repeated LeaderboardItem leaderboard = 9;
+}
+
+message Submission {
+  uint64 assignment_id = 1;
+  google.protobuf.Timestamp submitted_at = 2;
+  repeated uint64 users = 3;
+  string path = 4;
+}

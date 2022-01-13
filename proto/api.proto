@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+option go_package = "pkg/api/proto";
+
+message UploadFileRequest {
+  string filename = 1;
+}
+
+message UploadFileResponse {
+  string upload_id = 1;
+}
+
+message UploadChunkRequest {
+  string upload_id = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
+message UploadChunkResponse {
+  string upload_id = 1;
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+  string challenge_token = 3;
+  string captcha = 4;
+}
+
+message LoginResponse {
+  uint64 user_id = 1;
+  string token = 2;
+  google.protobuf.Timestamp expire_at = 3;
+}
+
+message GetCourseListRequest {
+  uint64 user_id = 1;
+}
+
+message GetCourseListResponse {
+  message CourseCardInfo {
+    string name = 1;
+    string short_name = 2;
+  }
+  repeated CourseCardInfo courses = 2;
+}
+
+service AutograderService {
+   rpc Login(LoginRequest) returns (LoginResponse);
+   rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
+}
