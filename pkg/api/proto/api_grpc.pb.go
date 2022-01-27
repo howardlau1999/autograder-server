@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.2.0
 // - protoc             v3.19.2
-// source: proto/api.proto
+// source: api.proto
 
 package proto
 
@@ -26,6 +26,13 @@ type AutograderServiceClient interface {
 	GetCourseList(ctx context.Context, in *GetCourseListRequest, opts ...grpc.CallOption) (*GetCourseListResponse, error)
 	GetAssignmentsInCourse(ctx context.Context, in *GetAssignmentsInCourseRequest, opts ...grpc.CallOption) (*GetAssignmentsInCourseResponse, error)
 	GetSubmissionsInAssignment(ctx context.Context, in *GetSubmissionsInAssignmentRequest, opts ...grpc.CallOption) (*GetSubmissionsInAssignmentResponse, error)
+	SubscribeSubmissions(ctx context.Context, in *SubscribeSubmissionsRequest, opts ...grpc.CallOption) (AutograderService_SubscribeSubmissionsClient, error)
+	StreamSubmissionLog(ctx context.Context, in *StreamSubmissionLogRequest, opts ...grpc.CallOption) (AutograderService_StreamSubmissionLogClient, error)
+	GetFile(ctx context.Context, in *GetFileRequest, opts ...grpc.CallOption) (AutograderService_GetFileClient, error)
+	GetSubmissionDetails(ctx context.Context, in *GetSubmissionDetailsRequest, opts ...grpc.CallOption) (*GetSubmissionDetailsResponse, error)
+	CreateManifest(ctx context.Context, in *CreateManifestRequest, opts ...grpc.CallOption) (*CreateManifestResponse, error)
+	CreateSubmission(ctx context.Context, in *CreateSubmissionRequest, opts ...grpc.CallOption) (*CreateSubmissionResponse, error)
+	InitUpload(ctx context.Context, in *InitUploadRequest, opts ...grpc.CallOption) (*InitUploadResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -72,6 +79,138 @@ func (c *autograderServiceClient) GetSubmissionsInAssignment(ctx context.Context
 	return out, nil
 }
 
+func (c *autograderServiceClient) SubscribeSubmissions(ctx context.Context, in *SubscribeSubmissionsRequest, opts ...grpc.CallOption) (AutograderService_SubscribeSubmissionsClient, error) {
+	stream, err := c.cc.NewStream(ctx, &AutograderService_ServiceDesc.Streams[0], "/AutograderService/SubscribeSubmissions", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &autograderServiceSubscribeSubmissionsClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type AutograderService_SubscribeSubmissionsClient interface {
+	Recv() (*SubscribeSubmissionsResponse, error)
+	grpc.ClientStream
+}
+
+type autograderServiceSubscribeSubmissionsClient struct {
+	grpc.ClientStream
+}
+
+func (x *autograderServiceSubscribeSubmissionsClient) Recv() (*SubscribeSubmissionsResponse, error) {
+	m := new(SubscribeSubmissionsResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *autograderServiceClient) StreamSubmissionLog(ctx context.Context, in *StreamSubmissionLogRequest, opts ...grpc.CallOption) (AutograderService_StreamSubmissionLogClient, error) {
+	stream, err := c.cc.NewStream(ctx, &AutograderService_ServiceDesc.Streams[1], "/AutograderService/StreamSubmissionLog", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &autograderServiceStreamSubmissionLogClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type AutograderService_StreamSubmissionLogClient interface {
+	Recv() (*ChunkResponse, error)
+	grpc.ClientStream
+}
+
+type autograderServiceStreamSubmissionLogClient struct {
+	grpc.ClientStream
+}
+
+func (x *autograderServiceStreamSubmissionLogClient) Recv() (*ChunkResponse, error) {
+	m := new(ChunkResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *autograderServiceClient) GetFile(ctx context.Context, in *GetFileRequest, opts ...grpc.CallOption) (AutograderService_GetFileClient, error) {
+	stream, err := c.cc.NewStream(ctx, &AutograderService_ServiceDesc.Streams[2], "/AutograderService/GetFile", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &autograderServiceGetFileClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type AutograderService_GetFileClient interface {
+	Recv() (*ChunkResponse, error)
+	grpc.ClientStream
+}
+
+type autograderServiceGetFileClient struct {
+	grpc.ClientStream
+}
+
+func (x *autograderServiceGetFileClient) Recv() (*ChunkResponse, error) {
+	m := new(ChunkResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *autograderServiceClient) GetSubmissionDetails(ctx context.Context, in *GetSubmissionDetailsRequest, opts ...grpc.CallOption) (*GetSubmissionDetailsResponse, error) {
+	out := new(GetSubmissionDetailsResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GetSubmissionDetails", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) CreateManifest(ctx context.Context, in *CreateManifestRequest, opts ...grpc.CallOption) (*CreateManifestResponse, error) {
+	out := new(CreateManifestResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/CreateManifest", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) CreateSubmission(ctx context.Context, in *CreateSubmissionRequest, opts ...grpc.CallOption) (*CreateSubmissionResponse, error) {
+	out := new(CreateSubmissionResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/CreateSubmission", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) InitUpload(ctx context.Context, in *InitUploadRequest, opts ...grpc.CallOption) (*InitUploadResponse, error) {
+	out := new(InitUploadResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/InitUpload", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -80,6 +219,13 @@ type AutograderServiceServer interface {
 	GetCourseList(context.Context, *GetCourseListRequest) (*GetCourseListResponse, error)
 	GetAssignmentsInCourse(context.Context, *GetAssignmentsInCourseRequest) (*GetAssignmentsInCourseResponse, error)
 	GetSubmissionsInAssignment(context.Context, *GetSubmissionsInAssignmentRequest) (*GetSubmissionsInAssignmentResponse, error)
+	SubscribeSubmissions(*SubscribeSubmissionsRequest, AutograderService_SubscribeSubmissionsServer) error
+	StreamSubmissionLog(*StreamSubmissionLogRequest, AutograderService_StreamSubmissionLogServer) error
+	GetFile(*GetFileRequest, AutograderService_GetFileServer) error
+	GetSubmissionDetails(context.Context, *GetSubmissionDetailsRequest) (*GetSubmissionDetailsResponse, error)
+	CreateManifest(context.Context, *CreateManifestRequest) (*CreateManifestResponse, error)
+	CreateSubmission(context.Context, *CreateSubmissionRequest) (*CreateSubmissionResponse, error)
+	InitUpload(context.Context, *InitUploadRequest) (*InitUploadResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -98,6 +244,27 @@ func (UnimplementedAutograderServiceServer) GetAssignmentsInCourse(context.Conte
 }
 func (UnimplementedAutograderServiceServer) GetSubmissionsInAssignment(context.Context, *GetSubmissionsInAssignmentRequest) (*GetSubmissionsInAssignmentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSubmissionsInAssignment not implemented")
+}
+func (UnimplementedAutograderServiceServer) SubscribeSubmissions(*SubscribeSubmissionsRequest, AutograderService_SubscribeSubmissionsServer) error {
+	return status.Errorf(codes.Unimplemented, "method SubscribeSubmissions not implemented")
+}
+func (UnimplementedAutograderServiceServer) StreamSubmissionLog(*StreamSubmissionLogRequest, AutograderService_StreamSubmissionLogServer) error {
+	return status.Errorf(codes.Unimplemented, "method StreamSubmissionLog not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetFile(*GetFileRequest, AutograderService_GetFileServer) error {
+	return status.Errorf(codes.Unimplemented, "method GetFile not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetSubmissionDetails(context.Context, *GetSubmissionDetailsRequest) (*GetSubmissionDetailsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSubmissionDetails not implemented")
+}
+func (UnimplementedAutograderServiceServer) CreateManifest(context.Context, *CreateManifestRequest) (*CreateManifestResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateManifest not implemented")
+}
+func (UnimplementedAutograderServiceServer) CreateSubmission(context.Context, *CreateSubmissionRequest) (*CreateSubmissionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateSubmission not implemented")
+}
+func (UnimplementedAutograderServiceServer) InitUpload(context.Context, *InitUploadRequest) (*InitUploadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InitUpload not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -184,6 +351,141 @@ func _AutograderService_GetSubmissionsInAssignment_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_SubscribeSubmissions_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SubscribeSubmissionsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AutograderServiceServer).SubscribeSubmissions(m, &autograderServiceSubscribeSubmissionsServer{stream})
+}
+
+type AutograderService_SubscribeSubmissionsServer interface {
+	Send(*SubscribeSubmissionsResponse) error
+	grpc.ServerStream
+}
+
+type autograderServiceSubscribeSubmissionsServer struct {
+	grpc.ServerStream
+}
+
+func (x *autograderServiceSubscribeSubmissionsServer) Send(m *SubscribeSubmissionsResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func _AutograderService_StreamSubmissionLog_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamSubmissionLogRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AutograderServiceServer).StreamSubmissionLog(m, &autograderServiceStreamSubmissionLogServer{stream})
+}
+
+type AutograderService_StreamSubmissionLogServer interface {
+	Send(*ChunkResponse) error
+	grpc.ServerStream
+}
+
+type autograderServiceStreamSubmissionLogServer struct {
+	grpc.ServerStream
+}
+
+func (x *autograderServiceStreamSubmissionLogServer) Send(m *ChunkResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func _AutograderService_GetFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetFileRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AutograderServiceServer).GetFile(m, &autograderServiceGetFileServer{stream})
+}
+
+type AutograderService_GetFileServer interface {
+	Send(*ChunkResponse) error
+	grpc.ServerStream
+}
+
+type autograderServiceGetFileServer struct {
+	grpc.ServerStream
+}
+
+func (x *autograderServiceGetFileServer) Send(m *ChunkResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func _AutograderService_GetSubmissionDetails_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSubmissionDetailsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GetSubmissionDetails(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GetSubmissionDetails",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GetSubmissionDetails(ctx, req.(*GetSubmissionDetailsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_CreateManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateManifestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).CreateManifest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/CreateManifest",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).CreateManifest(ctx, req.(*CreateManifestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_CreateSubmission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateSubmissionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).CreateSubmission(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/CreateSubmission",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).CreateSubmission(ctx, req.(*CreateSubmissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_InitUpload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InitUploadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).InitUpload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/InitUpload",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).InitUpload(ctx, req.(*InitUploadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -207,7 +509,39 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "GetSubmissionsInAssignment",
 			Handler:    _AutograderService_GetSubmissionsInAssignment_Handler,
 		},
+		{
+			MethodName: "GetSubmissionDetails",
+			Handler:    _AutograderService_GetSubmissionDetails_Handler,
+		},
+		{
+			MethodName: "CreateManifest",
+			Handler:    _AutograderService_CreateManifest_Handler,
+		},
+		{
+			MethodName: "CreateSubmission",
+			Handler:    _AutograderService_CreateSubmission_Handler,
+		},
+		{
+			MethodName: "InitUpload",
+			Handler:    _AutograderService_InitUpload_Handler,
+		},
 	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "proto/api.proto",
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "SubscribeSubmissions",
+			Handler:       _AutograderService_SubscribeSubmissions_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamSubmissionLog",
+			Handler:       _AutograderService_StreamSubmissionLog_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "GetFile",
+			Handler:       _AutograderService_GetFile_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "api.proto",
 }

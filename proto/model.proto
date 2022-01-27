@@ -1,5 +1,5 @@
 syntax = "proto3";
-option go_package = "pkg/model/proto";
+option go_package = "autograder-server/pkg/model/proto";
 
 import "google/protobuf/timestamp.proto";
 
@@ -97,6 +97,39 @@ message SubmissionReport {
 message Submission {
   uint64 assignment_id = 1;
   google.protobuf.Timestamp submitted_at = 2;
-  repeated uint64 users = 3;
+  repeated uint64 submitters = 3;
   string path = 4;
+  repeated string files = 5;
+}
+
+message UploadTokenPayload {
+  uint64 user_id = 1;
+  uint64 assignment_id = 2;
+  uint64 submission_id = 3;
+}
+
+message Manifest {
+  uint64 user_id = 1;
+  uint64 assignment_id = 2;
+  repeated string files = 3;
+}
+
+message Mergeable {
+  message StringList {
+    repeated string list = 1;
+  }
+  message IdList {
+    repeated uint64 list = 1;
+  }
+  oneof mergeable_oneof {
+    uint64 counter = 1;
+    StringList strings = 2;
+    IdList ids = 3;
+  }
+}
+
+message ManifestMetadata {
+  google.protobuf.Timestamp created_at = 1;
+  uint64 user_id = 2;
+  uint64 assignment_id = 3;
 }

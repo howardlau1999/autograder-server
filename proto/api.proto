@@ -1,7 +1,8 @@
 syntax = "proto3";
 
 import "google/protobuf/timestamp.proto";
-option go_package = "pkg/api/proto";
+import "model.proto";
+option go_package = "autograder-server/pkg/api/proto";
 
 message UploadFileRequest {
   string filename = 1;
@@ -72,6 +73,8 @@ enum SubmissionStatus {
   Aborted = 1;
   Finished = 2;
   Cancelled = 3;
+  Running = 4;
+  Cancelling = 5;
 }
 
 message GetSubmissionsInAssignmentResponse {
@@ -90,9 +93,83 @@ message GetSubmissionsInAssignmentResponse {
   repeated SubmissionInfo submissions = 1;
 }
 
+message GetSubmissionDetailsRequest {
+  uint64 submission_id = 1;
+}
+
+message GetSubmissionDetailsResponse {
+  uint64 submission_id = 1;
+  uint64 score = 2;
+  uint64 execution_time = 3;
+  repeated string files = 4;
+  repeated SubmissionReportTestcase tests = 5;
+}
+
+message SubscribeSubmissionsRequest {
+  repeated uint64 submission_ids = 1;
+}
+
+message SubscribeSubmissionsResponse {
+  message StatusUpdate {
+    uint64 submission_id = 1;
+    uint64 score = 2;
+    SubmissionStatus status = 3;
+  }
+  repeated StatusUpdate updates = 1;
+}
+
+message StreamSubmissionLogRequest {
+  uint64 submission_id = 1;
+}
+
+message GetFileRequest {
+  string path = 1;
+}
+
+message ChunkResponse {
+  string chunk = 1;
+}
+
+message CreateManifestRequest {
+  uint64 user_id = 1;
+  uint64 assignment_id = 2;
+}
+
+message CreateManifestResponse {
+  uint64 manifest_id = 1;
+  string token = 2;
+}
+
+message InitUploadRequest {
+  uint64 manifest_id = 1;
+  string filename = 2;
+  string token = 3;
+}
+
+message InitUploadResponse {
+  string token = 1;
+}
+
+message CreateSubmissionRequest {
+  uint64 user_id = 1;
+  uint64 assignment_id = 2;
+  uint64 manifest_id = 3;
+}
+
+message CreateSubmissionResponse {
+  uint64 submission_id = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
    rpc GetAssignmentsInCourse(GetAssignmentsInCourseRequest) returns (GetAssignmentsInCourseResponse);
    rpc GetSubmissionsInAssignment(GetSubmissionsInAssignmentRequest) returns (GetSubmissionsInAssignmentResponse);
+   rpc SubscribeSubmissions(SubscribeSubmissionsRequest) returns (stream SubscribeSubmissionsResponse);
+   rpc StreamSubmissionLog(StreamSubmissionLogRequest) returns (stream ChunkResponse);
+   rpc GetFile(GetFileRequest) returns (stream ChunkResponse);
+   rpc GetSubmissionDetails(GetSubmissionDetailsRequest) returns (GetSubmissionDetailsResponse);
+   rpc CreateManifest(CreateManifestRequest) returns (CreateManifestResponse);
+   rpc CreateSubmission(CreateSubmissionRequest) returns (CreateSubmissionResponse);
+   rpc InitUpload(InitUploadRequest) returns (InitUploadResponse);
 }

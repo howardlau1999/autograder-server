@@ -10,6 +10,14 @@ type AutograderService struct {
 	autograder_pb.UnimplementedAutograderServiceServer
 }
 
+func (a AutograderService) StreamSubmissionLog(request *autograder_pb.StreamSubmissionLogRequest, server autograder_pb.AutograderService_StreamSubmissionLogServer) error {
+	return nil
+}
+
+func (a AutograderService) SubscribeSubmissions(request *autograder_pb.SubscribeSubmissionsRequest, server autograder_pb.AutograderService_SubscribeSubmissionsServer) error {
+	return nil
+}
+
 func (a AutograderService) GetSubmissionsInAssignment(ctx context.Context, request *autograder_pb.GetSubmissionsInAssignmentRequest) (*autograder_pb.GetSubmissionsInAssignmentResponse, error) {
 	submitters := []*autograder_pb.GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter{
 		{
@@ -27,6 +35,7 @@ func (a AutograderService) GetSubmissionsInAssignment(ctx context.Context, reque
 				SubmittedAt:  timestamppb.Now(),
 				Submitters:   submitters,
 				Score:        20,
+				Status:       autograder_pb.SubmissionStatus_Finished,
 				MaxScore:     100,
 			},
 			{
@@ -34,6 +43,7 @@ func (a AutograderService) GetSubmissionsInAssignment(ctx context.Context, reque
 				SubmittedAt:  timestamppb.Now(),
 				Submitters:   submitters,
 				Score:        80,
+				Status:       autograder_pb.SubmissionStatus_Running,
 				MaxScore:     100,
 			},
 		},
