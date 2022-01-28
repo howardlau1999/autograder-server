@@ -36,29 +36,6 @@ func (mr *KVManifestRepository) getFilesPrefix(id uint64) []byte {
 	return []byte(fmt.Sprintf("manifest:files:%d:", id))
 }
 
-func (mr *KVManifestRepository) getNextId(key []byte) (uint64, error) {
-	one := &model_pb.Mergeable{MergeableOneof: &model_pb.Mergeable_Counter{Counter: 1}}
-	raw, err := proto.Marshal(one)
-	if err != nil {
-		return 0, err
-	}
-	err = mr.db.Merge(key, raw, pebble.Sync)
-	if err != nil {
-		return 0, err
-	}
-	raw, closer, err := mr.db.Get(key)
-	if err != nil {
-		return 0, err
-	}
-	defer closer.Close()
-	mergeable := &model_pb.Mergeable{}
-	err = proto.Unmarshal(raw, mergeable)
-	if err != nil {
-		return 0, err
-	}
-	return mergeable.GetCounter(), nil
-}
-
 func (mr *KVManifestRepository) CreateManifest(userId, assignmentId uint64) (uint64, error) {
 	metadata := &model_pb.ManifestMetadata{
 		CreatedAt:    timestamppb.Now(),
@@ -69,7 +46,7 @@ func (mr *KVManifestRepository) CreateManifest(userId, assignmentId uint64) (uin
 	if err != nil {
 		return 0, err
 	}
-	id, err := mr.getNextId([]byte("manifest:next_id"))
+	id, err := getNextId(mr.db, []byte("manifest:next_id"))
 	if err != nil {
 		return 0, err
 	}
@@ -124,8 +101,18 @@ func (mr *KVManifestRepository) AddFileToManifest(filename string, id uint64) (u
 }
 
 func (mr *KVManifestRepository) DeleteManifest(id uint64) error {
-	//TODO implement me
-	panic("implement me")
+	prefix := mr.getFilesPrefix(id)
+
+	err := mr.db.DeleteRange(prefix, keyUpperBound(prefix), pebble.Sync)
+	if err != nil {
+		return err
+	}
+	err = mr.db.Delete(mr.getNextFileIdKey(id), pebble.Sync)
+	if err != nil {
+		return err
+	}
+	err = mr.db.Delete(mr.getMetadataKey(id), pebble.Sync)
+	return err
 }
 
 func NewKVManifestRepository(db *pebble.DB) ManifestRepository {
