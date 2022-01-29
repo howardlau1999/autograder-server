@@ -5,6 +5,7 @@ import (
 	"autograder-server/pkg/repository"
 	"context"
 	"github.com/cockroachdb/pebble"
+	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -13,6 +14,7 @@ import (
 type AutograderService struct {
 	autograder_pb.UnimplementedAutograderServiceServer
 	manifestRepo repository.ManifestRepository
+	userRepo     repository.UserRepository
 }
 
 func (a *AutograderService) GetFile(request *autograder_pb.GetFileRequest, server autograder_pb.AutograderService_GetFileServer) error {
@@ -108,8 +110,17 @@ func (a *AutograderService) GetCourseList(ctx context.Context, request *autograd
 }
 
 func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.LoginRequest) (*autograder_pb.LoginResponse, error) {
+	username := request.GetUsername()
+	password := request.GetPassword()
+	user, id, err := a.userRepo.GetUserByUsername(ctx, username)
+	if user == nil || err != nil {
+		return nil, status.Error(codes.InvalidArgument, "WRONG_PASSWORD")
+	}
+	if bcrypt.CompareHashAndPassword(user.GetPassword(), []byte(password)) != nil {
+		return nil, status.Error(codes.InvalidArgument, "WRONG_PASSWORD")
+	}
 	response := &autograder_pb.LoginResponse{
-		UserId:   0,
+		UserId:   id,
 		Token:    "deadbeef",
 		ExpireAt: nil,
 	}
@@ -123,5 +134,6 @@ func NewAutograderServiceServer() autograder_pb.AutograderServiceServer {
 	}
 	return &AutograderService{
 		manifestRepo: repository.NewKVManifestRepository(db),
+		userRepo:     repository.NewKVUserRepository(db),
 	}
 }

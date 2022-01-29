@@ -17,15 +17,12 @@ type ManifestRepository interface {
 }
 
 type KVManifestRepository struct {
-	db *pebble.DB
+	db  *pebble.DB
+	seq Sequencer
 }
 
 func (mr *KVManifestRepository) getMetadataKey(id uint64) []byte {
 	return []byte(fmt.Sprintf("manifest:metadata:%d", id))
-}
-
-func (mr *KVManifestRepository) getNextFileIdKey(id uint64) []byte {
-	return []byte(fmt.Sprintf("manifest:next_file_id:%d", id))
 }
 
 func (mr *KVManifestRepository) getFileKey(id uint64, filename string) []byte {
@@ -46,7 +43,7 @@ func (mr *KVManifestRepository) CreateManifest(userId, assignmentId uint64) (uin
 	if err != nil {
 		return 0, err
 	}
-	id, err := getNextId(mr.db, []byte("manifest:next_id"))
+	id, err := mr.seq.GetNextId()
 	if err != nil {
 		return 0, err
 	}
@@ -64,7 +61,7 @@ func (mr *KVManifestRepository) DeleteFileInManifest(filename string, id uint64)
 
 func (mr *KVManifestRepository) GetFilesInManifest(id uint64) ([]string, error) {
 	prefix := mr.getFilesPrefix(id)
-	iter := mr.db.NewIter(prefixIterOptions(prefix))
+	iter := mr.db.NewIter(PrefixIterOptions(prefix))
 	var files []string
 	for iter.First(); iter.Valid(); iter.Next() {
 		files = append(files, string(iter.Key()[len(prefix):]))
@@ -103,11 +100,7 @@ func (mr *KVManifestRepository) AddFileToManifest(filename string, id uint64) (u
 func (mr *KVManifestRepository) DeleteManifest(id uint64) error {
 	prefix := mr.getFilesPrefix(id)
 
-	err := mr.db.DeleteRange(prefix, keyUpperBound(prefix), pebble.Sync)
-	if err != nil {
-		return err
-	}
-	err = mr.db.Delete(mr.getNextFileIdKey(id), pebble.Sync)
+	err := mr.db.DeleteRange(prefix, KeyUpperBound(prefix), pebble.Sync)
 	if err != nil {
 		return err
 	}
@@ -116,5 +109,6 @@ func (mr *KVManifestRepository) DeleteManifest(id uint64) error {
 }
 
 func NewKVManifestRepository(db *pebble.DB) ManifestRepository {
-	return &KVManifestRepository{db: db}
+	seq, _ := NewKVSequencer(db, []byte("manifest:next_id"))
+	return &KVManifestRepository{db: db, seq: seq}
 }

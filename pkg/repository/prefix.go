@@ -2,11 +2,11 @@ package repository
 
 import "github.com/cockroachdb/pebble"
 
-var keyUpperBound func(b []byte) []byte
-var prefixIterOptions func(prefix []byte) *pebble.IterOptions
+var KeyUpperBound func(b []byte) []byte
+var PrefixIterOptions func(prefix []byte) *pebble.IterOptions
 
 func init() {
-	keyUpperBound = func(b []byte) []byte {
+	KeyUpperBound = func(b []byte) []byte {
 		end := make([]byte, len(b))
 		copy(end, b)
 		for i := len(end) - 1; i >= 0; i-- {
@@ -18,10 +18,10 @@ func init() {
 		return nil // no upper-bound
 	}
 
-	prefixIterOptions = func(prefix []byte) *pebble.IterOptions {
+	PrefixIterOptions = func(prefix []byte) *pebble.IterOptions {
 		return &pebble.IterOptions{
 			LowerBound: prefix,
-			UpperBound: keyUpperBound(prefix),
+			UpperBound: KeyUpperBound(prefix),
 		}
 	}
 }
