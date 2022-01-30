@@ -160,6 +160,12 @@ message CreateSubmissionResponse {
   uint64 submission_id = 1;
 }
 
+message UploadTokenPayload {
+  uint64 user_id = 1;
+  uint64 assignment_id = 2;
+  uint64 manifest_id = 3;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);

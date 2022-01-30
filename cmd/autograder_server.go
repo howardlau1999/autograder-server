@@ -5,13 +5,16 @@ import (
 	autograder_pb "autograder-server/pkg/api/proto"
 	"autograder-server/pkg/middleware"
 	"autograder-server/pkg/storage"
+	"encoding/base64"
 	"fmt"
 	"github.com/go-chi/chi"
 	chiMiddleware "github.com/go-chi/chi/middleware"
+	"github.com/golang-jwt/jwt"
 	"github.com/improbable-eng/grpc-web/go/grpcweb"
 	"github.com/rs/cors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
+	"google.golang.org/protobuf/proto"
 	"net/http"
 	"strings"
 	"time"
@@ -48,44 +51,50 @@ func main() {
 	router.Post("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var err error
 		normalizedContentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-type")))
-		//uploadTokenString := strings.TrimSpace(r.Header.Get("Upload-token"))
-		//uploadToken, err := jwt.Parse(uploadTokenString, func(token *jwt.Token) (interface{}, error) {
-		//	if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-		//		return nil, fmt.Errorf("unexpected singning method: %v", token.Header["alg"])
-		//	}
-		//
-		//	return []byte("upload-token-sign-secret"), nil
-		//})
-		//if err != nil {
-		//	w.WriteHeader(http.StatusBadRequest)
-		//	return
-		//}
-		//
-		//claims, ok := uploadToken.Claims.(jwt.MapClaims)
-		//if !ok || !uploadToken.Valid || claims.Valid() != nil {
-		//	w.WriteHeader(http.StatusBadRequest)
-		//	return
-		//}
-		//payloadString, ok := claims["payload"].(string)
-		//if !ok {
-		//	w.WriteHeader(http.StatusBadRequest)
-		//	return
-		//}
-		//
-		//payload, err := base64.StdEncoding.DecodeString(payloadString)
-		//if !ok {
-		//	w.WriteHeader(http.StatusBadRequest)
-		//	return
-		//}
-		//
-		//var payloadPB model_pb.UploadTokenPayload
-		//err = proto.Unmarshal(payload, &payloadPB)
-		//if err != nil {
-		//	w.WriteHeader(http.StatusBadRequest)
-		//	return
-		//}
+		uploadTokenString := strings.TrimSpace(r.Header.Get("Upload-token"))
+		uploadToken, err := jwt.Parse(uploadTokenString, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected singning method: %v", token.Header["alg"])
+			}
+
+			return []byte("upload-token-sign-secret"), nil
+		})
+		if err != nil {
+			grpclog.Errorf("failed to parse: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		claims, ok := uploadToken.Claims.(jwt.MapClaims)
+		if !ok || !uploadToken.Valid || claims.Valid() != nil {
+			grpclog.Errorf("not valid")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		payloadString, ok := claims["payload"].(string)
+		if !ok {
+			grpclog.Errorf("no payload")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		payload, err := base64.StdEncoding.DecodeString(payloadString)
+		if err != nil {
+			grpclog.Errorf("base64: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		var payloadPB autograder_pb.UploadTokenPayload
+		err = proto.Unmarshal(payload, &payloadPB)
+		if err != nil {
+			grpclog.Errorf("proto: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 
 		if !strings.HasPrefix(normalizedContentType, "multipart/form-data; boundary") {
+			grpclog.Errorf("malformed form")
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -111,7 +120,7 @@ func main() {
 			header.Header, fileContentType)
 		err = ls.Put(
 			r.Context(),
-			fmt.Sprintf("uploads/%d/%d", 1, 1),
+			fmt.Sprintf("uploads/manifests/%d", payloadPB.ManifestId),
 			fmt.Sprintf("%d", time.Now().UnixNano()),
 			uploadFile)
 		if err != nil {

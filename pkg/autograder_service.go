@@ -4,11 +4,15 @@ import (
 	autograder_pb "autograder-server/pkg/api/proto"
 	"autograder-server/pkg/repository"
 	"context"
+	"encoding/base64"
 	"github.com/cockroachdb/pebble"
+	"github.com/golang-jwt/jwt"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"time"
 )
 
 type AutograderService struct {
@@ -41,12 +45,33 @@ func (a *AutograderService) CreateSubmission(ctx context.Context, request *autog
 	panic("implement me")
 }
 
+type ProtobufClaim struct {
+	jwt.StandardClaims
+	Payload string `json:"payload"`
+}
+
 func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_pb.InitUploadRequest) (*autograder_pb.InitUploadResponse, error) {
 	_, err := a.manifestRepo.AddFileToManifest(request.GetFilename(), request.GetManifestId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to add file to manifest")
 	}
-	resp := &autograder_pb.InitUploadResponse{}
+	key := []byte("upload-token-sign-secret")
+	payload := &autograder_pb.UploadTokenPayload{
+		ManifestId: request.ManifestId,
+	}
+	raw, err := proto.Marshal(payload)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "PROTOBUF_MARSHAL")
+	}
+	now := time.Now()
+	expireAt := now.Add(1 * time.Minute)
+	claims := ProtobufClaim{Payload: base64.StdEncoding.EncodeToString(raw), StandardClaims: jwt.StandardClaims{IssuedAt: now.Unix(), ExpiresAt: expireAt.Unix()}}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
+	ss, err := token.SignedString(key)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "JWT_SIGN")
+	}
+	resp := &autograder_pb.InitUploadResponse{Token: ss}
 	return resp, nil
 }
 

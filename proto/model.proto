@@ -21,6 +21,7 @@ enum CourseRole {
 message CourseMember {
   uint64 user_id = 1;
   CourseRole role = 2;
+  uint64 course_id = 3;
 }
 
 message CourseGroup {
@@ -32,7 +33,6 @@ message Course {
   string short_name = 2;
   string term = 3;
   string description = 4;
-  repeated uint64 assignments = 5;
 }
 
 message RubricItem {
@@ -52,7 +52,7 @@ enum AssignmentType {
 message Assignment {
   string name = 1;
   uint64 course_id = 2;
-  AssignmentType asgn_type = 3;
+  AssignmentType assignment_type = 3;
   google.protobuf.Timestamp release_date = 4;
   google.protobuf.Timestamp due_date = 5;
   google.protobuf.Timestamp late_due_date = 6;
@@ -103,11 +103,14 @@ message Submission {
   repeated string files = 5;
 }
 
-message UploadTokenPayload {
-  uint64 user_id = 1;
-  uint64 assignment_id = 2;
-  uint64 submission_id = 3;
+message SubmissionEntry {
+  oneof entry_oneof {
+    Submission submission = 1;
+    uint64 submission_id = 2;
+  }
 }
+
+
 
 message Manifest {
   uint64 user_id = 1;

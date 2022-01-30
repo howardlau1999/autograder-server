@@ -14,11 +14,37 @@ type UserRepository interface {
 	UpdateUser(ctx context.Context, id uint64, user *model_pb.User) error
 	GetUserByUsername(ctx context.Context, username string) (*model_pb.User, uint64, error)
 	GetUserById(ctx context.Context, id uint64) (*model_pb.User, error)
+	AddToCourse(ctx context.Context, member *model_pb.CourseMember) error
+	GetCoursesByUser(ctx context.Context, userId uint64) ([]*model_pb.CourseMember, error)
 }
 
 type KVUserRepository struct {
 	db  *pebble.DB
 	seq Sequencer
+}
+
+func (ur *KVUserRepository) GetCoursesByUser(ctx context.Context, userId uint64) ([]*model_pb.CourseMember, error) {
+	var courses []*model_pb.CourseMember
+	prefix := ur.getCoursePrefix(userId)
+	iter := ur.db.NewIter(PrefixIterOptions(prefix))
+	for iter.First(); iter.Valid(); iter.Next() {
+		course := &model_pb.CourseMember{}
+		err := proto.Unmarshal(iter.Value(), course)
+		if err != nil {
+			return nil, err
+		}
+		courses = append(courses, course)
+	}
+	iter.Close()
+	return courses, nil
+}
+
+func (ur *KVUserRepository) AddToCourse(ctx context.Context, member *model_pb.CourseMember) error {
+	raw, err := proto.Marshal(member)
+	if err != nil {
+		return err
+	}
+	return ur.db.Set(ur.getCourseKey(member.GetUserId(), member.GetCourseId()), raw, pebble.Sync)
 }
 
 func (ur *KVUserRepository) getUserIdKey(id uint64) []byte {
@@ -27,6 +53,14 @@ func (ur *KVUserRepository) getUserIdKey(id uint64) []byte {
 
 func (ur *KVUserRepository) getUserNameKey(name string) []byte {
 	return []byte(fmt.Sprintf("user:name:%s", name))
+}
+
+func (ur *KVUserRepository) getCoursePrefix(id uint64) []byte {
+	return append([]byte(fmt.Sprintf("user:courses:%d:", id)))
+}
+
+func (ur *KVUserRepository) getCourseKey(uid uint64, cid uint64) []byte {
+	return append(ur.getCoursePrefix(uid), Uint64ToBytes(cid)...)
 }
 
 func (ur *KVUserRepository) CreateUser(ctx context.Context, user *model_pb.User) (uint64, error) {
