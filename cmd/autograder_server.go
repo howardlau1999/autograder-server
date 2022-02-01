@@ -1,8 +1,8 @@
 package main
 
 import (
-	"autograder-server/pkg"
 	autograder_pb "autograder-server/pkg/api/proto"
+	grpc2 "autograder-server/pkg/grpc"
 	"autograder-server/pkg/middleware"
 	"autograder-server/pkg/storage"
 	"encoding/base64"
@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/grpclog"
 	"google.golang.org/protobuf/proto"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -33,7 +34,7 @@ func main() {
 	})
 
 	grpcServer := grpc.NewServer()
-	autograderService := pkg.NewAutograderServiceServer()
+	autograderService := grpc2.NewAutograderServiceServer()
 	autograder_pb.RegisterAutograderServiceServer(grpcServer, autograderService)
 	wrappedGrpc := grpcweb.WrapServer(grpcServer, grpcweb.WithOriginFunc(func(origin string) bool {
 		return true
@@ -118,10 +119,10 @@ func main() {
 		fileContentType := http.DetectContentType(fileHeader)
 		grpclog.Infof("mime_header = %v, detected_content_type = %s",
 			header.Header, fileContentType)
+		destPath := filepath.Join(fmt.Sprintf("uploads/manifests/%d", payloadPB.ManifestId), payloadPB.Filename)
 		err = ls.Put(
 			r.Context(),
-			fmt.Sprintf("uploads/manifests/%d", payloadPB.ManifestId),
-			fmt.Sprintf("%d", time.Now().UnixNano()),
+			destPath,
 			uploadFile)
 		if err != nil {
 			grpclog.Errorf("failed to put file: %v", err)

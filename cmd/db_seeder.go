@@ -6,6 +6,7 @@ import (
 	"context"
 	"github.com/cockroachdb/pebble"
 	"golang.org/x/crypto/bcrypt"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"log"
 )
 
@@ -16,6 +17,7 @@ func main() {
 	}
 	userRepo := repository.NewKVUserRepository(db)
 	courseRepo := repository.NewKVCourseRepository(db)
+	assignmentRepo := repository.NewKVAssignmentRepository(db)
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte("root"), bcrypt.DefaultCost)
 	rootUser := &model_pb.User{Username: "root", Password: passwordHash, Email: "bob@example.com"}
 	id, err := userRepo.CreateUser(context.Background(), rootUser)
@@ -30,6 +32,27 @@ func main() {
 		Description: "这是第一个课程。",
 	}
 	courseId, err := courseRepo.CreateCourse(context.Background(), firstCourse)
+	if err != nil {
+		panic(err)
+	}
+	firstAssignment := &model_pb.Assignment{
+		Name:           "Hello World!",
+		CourseId:       courseId,
+		AssignmentType: model_pb.AssignmentType_Programming,
+		ReleaseDate:    timestamppb.Now(),
+		DueDate:        timestamppb.Now(),
+		LateDueDate:    timestamppb.Now(),
+		ProgrammingConfig: &model_pb.ProgrammingAssignmentConfig{
+			Image:     "howardlau1999/hello-world",
+			FullScore: 100,
+		},
+		Published: true,
+	}
+	assignmentId, err := assignmentRepo.CreateAssignment(context.Background(), firstAssignment)
+	if err != nil {
+		panic(err)
+	}
+	err = courseRepo.AddAssignment(context.Background(), courseId, assignmentId)
 	if err != nil {
 		panic(err)
 	}

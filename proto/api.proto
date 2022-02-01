@@ -43,6 +43,7 @@ message GetCourseListResponse {
   message CourseCardInfo {
     string name = 1;
     string short_name = 2;
+    CourseRole role = 3;
   }
   repeated CourseCardInfo courses = 2;
 }
@@ -91,18 +92,6 @@ message GetSubmissionsInAssignmentResponse {
     SubmissionStatus status = 6;
   }
   repeated SubmissionInfo submissions = 1;
-}
-
-message GetSubmissionDetailsRequest {
-  uint64 submission_id = 1;
-}
-
-message GetSubmissionDetailsResponse {
-  uint64 submission_id = 1;
-  uint64 score = 2;
-  uint64 execution_time = 3;
-  repeated string files = 4;
-  repeated SubmissionReportTestcase tests = 5;
 }
 
 message SubscribeSubmissionsRequest {
@@ -154,16 +143,33 @@ message CreateSubmissionRequest {
   uint64 user_id = 1;
   uint64 assignment_id = 2;
   uint64 manifest_id = 3;
+  repeated uint64 submitters = 4;
 }
 
 message CreateSubmissionResponse {
   uint64 submission_id = 1;
+  repeated string files = 2;
+  repeated string submitters = 3;
 }
 
 message UploadTokenPayload {
   uint64 user_id = 1;
   uint64 assignment_id = 2;
   uint64 manifest_id = 3;
+  string filename = 4;
+}
+
+message UserTokenPayload {
+  uint64 user_id = 1;
+  string username = 2;
+}
+
+message GetSubmissionReportRequest {
+  uint64 submission_id = 1;
+}
+
+message GetSubmissionReportResponse {
+  SubmissionReport report = 1;
 }
 
 service AutograderService {
@@ -174,8 +180,8 @@ service AutograderService {
    rpc SubscribeSubmissions(SubscribeSubmissionsRequest) returns (stream SubscribeSubmissionsResponse);
    rpc StreamSubmissionLog(StreamSubmissionLogRequest) returns (stream ChunkResponse);
    rpc GetFile(GetFileRequest) returns (stream ChunkResponse);
-   rpc GetSubmissionDetails(GetSubmissionDetailsRequest) returns (GetSubmissionDetailsResponse);
    rpc CreateManifest(CreateManifestRequest) returns (CreateManifestResponse);
    rpc CreateSubmission(CreateSubmissionRequest) returns (CreateSubmissionResponse);
    rpc InitUpload(InitUploadRequest) returns (InitUploadResponse);
+   rpc GetSubmissionReport(GetSubmissionReportRequest) returns (GetSubmissionReportResponse);
 }

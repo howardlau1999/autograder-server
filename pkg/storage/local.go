@@ -12,11 +12,12 @@ import (
 type LocalStorage struct {
 }
 
-func (ls *LocalStorage) Put(ctx context.Context, dir string, filename string, r io.ReadSeeker) error {
+func (ls *LocalStorage) Put(ctx context.Context, path string, r io.ReadSeeker) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
+	dir, filename := filepath.Split(path)
 	os.MkdirAll(filepath.Join(cwd, dir), 0755)
 	f, err := os.OpenFile(filepath.Join(cwd, dir, filename), os.O_TRUNC|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {

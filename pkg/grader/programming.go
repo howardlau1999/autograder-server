@@ -2,31 +2,43 @@ package grader
 
 import (
 	model_pb "autograder-server/pkg/model/proto"
+	"autograder-server/pkg/repository"
 	"context"
+	"fmt"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
-	"io"
+	"google.golang.org/grpc/grpclog"
+	"google.golang.org/protobuf/encoding/protojson"
+	"io/ioutil"
 	"os"
+	"path/filepath"
 )
 
 type ProgrammingGrader interface {
-	GradeSubmission(submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig)
+	GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig)
 }
 
 type DockerProgrammingGrader struct {
 	cli *client.Client
+	srr repository.SubmissionReportRepository
 }
 
-func (d *DockerProgrammingGrader) GradeSubmission(submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig) {
+func (d *DockerProgrammingGrader) runDocker(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig) (internalError int64, exitCode int64, resultsJSONPath string) {
 	closer, err := d.cli.ImagePull(context.Background(), config.Image, types.ImagePullOptions{})
 	if err != nil {
-		panic(err)
+		internalError = 1
+		grpclog.Errorf("failed to pull image for %d: %v", submissionId, err)
+		return
 	}
-	io.Copy(os.Stdout, closer)
+	_, err = ioutil.ReadAll(closer)
+	if err != nil {
+		internalError = 2
+		return
+	}
 	ctCfg := &container.Config{
 		Hostname:     "",
 		Domainname:   "",
@@ -38,39 +50,112 @@ func (d *DockerProgrammingGrader) GradeSubmission(submission *model_pb.Submissio
 		OpenStdin:    true,
 		StdinOnce:    false,
 		Env:          nil,
-		Cmd:          []string{"touch", "a.txt"},
+		Entrypoint:   []string{"sh", "-c", "/autograder/run > /autograder/results/stdout 2> /autograder/results/stderr"},
 		Image:        config.Image,
 		Volumes:      nil,
 		WorkingDir:   "/autograder",
 	}
 	cwd, _ := os.Getwd()
+	runDir := filepath.Join(cwd, fmt.Sprintf("runs/submissions/%d", submissionId))
+	resultsDir := filepath.Join(runDir, "results")
+	resultsJSONPath = filepath.Join(resultsDir, "results.json")
+	subDir := filepath.Join(cwd, submission.Path)
+	os.RemoveAll(runDir)
+	os.MkdirAll(runDir, 0755)
+	os.MkdirAll(resultsDir, 0755)
 	hstCfg := &container.HostConfig{
-		Mounts: []mount.Mount{{Type: mount.TypeBind, Source: cwd, Target: "/autograder"}},
+		Mounts: []mount.Mount{
+			{Type: mount.TypeBind, Source: subDir, Target: "/autograder/submission"},
+			{Type: mount.TypeBind, Source: resultsDir, Target: "/autograder/results"},
+		},
 	}
 	netCfg := &network.NetworkingConfig{}
 	platform := &specs.Platform{Architecture: "amd64", OS: "linux"}
 	body, err := d.cli.ContainerCreate(context.Background(), ctCfg, hstCfg, netCfg, platform, "")
 	if err != nil {
-		panic(err)
+		internalError = 3
+		grpclog.Errorf("failed to create container for %d: %v", submissionId, err)
+		return
 	}
 	id := body.ID
 	doneC, errC := d.cli.ContainerWait(context.Background(), id, container.WaitConditionNextExit)
 	err = d.cli.ContainerStart(context.Background(), id, types.ContainerStartOptions{})
 	if err != nil {
-		panic(err)
+		internalError = 4
+		grpclog.Errorf("failed to start container for %d: %v", submissionId, err)
+		return
 	}
 	select {
 	case err := <-errC:
-		panic(err)
+		internalError = 5
+		grpclog.Errorf("failed to wait container for %d: %v", submissionId, err)
+		return
 	case <-doneC:
 
 	}
+	containerDetail, err := d.cli.ContainerInspect(context.Background(), id)
+	if err != nil {
+		internalError = 6
+		grpclog.Errorf("failed to inspect container for %d: %v", submissionId, err)
+		return
+	}
+	exitCode = int64(containerDetail.State.ExitCode)
+	err = d.cli.ContainerRemove(context.Background(), id, types.ContainerRemoveOptions{})
+	if err != nil {
+		internalError = 7
+		grpclog.Errorf("failed to remove container for %d: %v", submissionId, err)
+		return
+	}
+	return
 }
 
-func NewDockerProgrammingGrader() ProgrammingGrader {
+func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig) {
+	internalError, exitCode, resultsJSONPath := d.runDocker(submissionId, submission, config)
+	resultsPB := &model_pb.SubmissionReport{}
+	var json []byte
+	var err error
+	var resultsJSON *os.File
+	if internalError == 0 && exitCode == 0 {
+		resultsJSON, err = os.Open(resultsJSONPath)
+		if err != nil {
+			internalError = 8
+			goto WriteReport
+		}
+		defer resultsJSON.Close()
+		json, err = ioutil.ReadAll(resultsJSON)
+		if err != nil {
+			internalError = 9
+			goto WriteReport
+		}
+		err = protojson.Unmarshal(json, resultsPB)
+		if err != nil {
+			internalError = 10
+			goto WriteReport
+		}
+		if resultsPB.GetScore() == 0 {
+			score := uint64(0)
+			maxScore := uint64(0)
+			for _, testcase := range resultsPB.Tests {
+				score += testcase.Score
+				maxScore += testcase.MaxScore
+			}
+			resultsPB.Score = score
+			resultsPB.MaxScore = maxScore
+		}
+	}
+WriteReport:
+	resultsPB.InternalError = internalError
+	resultsPB.ExitCode = exitCode
+	err = d.srr.UpdateSubmissionReport(context.Background(), submissionId, resultsPB)
+	if err != nil {
+		grpclog.Errorf("failed to update submission report for %d: %v", submissionId, err)
+	}
+}
+
+func NewDockerProgrammingGrader(srr repository.SubmissionReportRepository) ProgrammingGrader {
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		panic(err)
 	}
-	return &DockerProgrammingGrader{cli: cli}
+	return &DockerProgrammingGrader{cli: cli, srr: srr}
 }

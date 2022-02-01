@@ -81,11 +81,13 @@ message SubmissionReportTestcase {
   repeated string tags = 5;
   string output = 6;
   string output_path = 7;
+  TestcaseVisibility visibility = 8;
 }
 
 message SubmissionReport {
   uint64 submission_id = 1;
   uint64 score = 2;
+  uint64 max_score = 12;
   uint64 execution_time = 3;
   string output = 4;
   string output_path = 5;
@@ -93,6 +95,8 @@ message SubmissionReport {
   TestcaseVisibility stdout_visibility = 7;
   repeated SubmissionReportTestcase tests = 8;
   repeated LeaderboardItem leaderboard = 9;
+  int64 exit_code = 10;
+  int64 internal_error = 11;
 }
 
 message Submission {
