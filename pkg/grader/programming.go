@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -19,7 +20,7 @@ import (
 )
 
 type ProgrammingGrader interface {
-	GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig)
+	GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig, notifyC chan *model_pb.SubmissionReport)
 }
 
 type DockerProgrammingGrader struct {
@@ -28,16 +29,27 @@ type DockerProgrammingGrader struct {
 }
 
 func (d *DockerProgrammingGrader) runDocker(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig) (internalError int64, exitCode int64, resultsJSONPath string) {
-	closer, err := d.cli.ImagePull(context.Background(), config.Image, types.ImagePullOptions{})
+	imgs, err := d.cli.ImageList(context.Background(), types.ImageListOptions{
+		All:     false,
+		Filters: filters.NewArgs(filters.Arg("reference", fmt.Sprintf("%s", config.Image))),
+	})
 	if err != nil {
-		internalError = 1
-		grpclog.Errorf("failed to pull image for %d: %v", submissionId, err)
+		internalError = -1
+		grpclog.Errorf("failed to list image for %d: %v", submissionId, err)
 		return
 	}
-	_, err = ioutil.ReadAll(closer)
-	if err != nil {
-		internalError = 2
-		return
+	if len(imgs) == 0 {
+		closer, err := d.cli.ImagePull(context.Background(), config.Image, types.ImagePullOptions{})
+		if err != nil {
+			internalError = 1
+			grpclog.Errorf("failed to pull image for %d: %v", submissionId, err)
+			return
+		}
+		_, err = ioutil.ReadAll(closer)
+		if err != nil {
+			internalError = 2
+			return
+		}
 	}
 	ctCfg := &container.Config{
 		Hostname:     "",
@@ -109,7 +121,7 @@ func (d *DockerProgrammingGrader) runDocker(submissionId uint64, submission *mod
 	return
 }
 
-func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig) {
+func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig, notifyC chan *model_pb.SubmissionReport) {
 	internalError, exitCode, resultsJSONPath := d.runDocker(submissionId, submission, config)
 	resultsPB := &model_pb.SubmissionReport{}
 	var json []byte
@@ -149,6 +161,10 @@ WriteReport:
 	err = d.srr.UpdateSubmissionReport(context.Background(), submissionId, resultsPB)
 	if err != nil {
 		grpclog.Errorf("failed to update submission report for %d: %v", submissionId, err)
+	}
+
+	if notifyC != nil {
+		notifyC <- resultsPB
 	}
 }
 

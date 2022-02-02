@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,6 +32,8 @@ type AutograderService struct {
 	assignmentRepo       repository.AssignmentRepository
 	courseRepo           repository.CourseRepository
 	progGrader           grader.ProgrammingGrader
+	reportSubs           map[uint64][]chan struct{}
+	subsMu               *sync.Mutex
 }
 
 func (a *AutograderService) GetSubmissionReport(ctx context.Context, request *autograder_pb.GetSubmissionReportRequest) (*autograder_pb.GetSubmissionReportResponse, error) {
@@ -81,7 +84,19 @@ func (a *AutograderService) CreateSubmission(ctx context.Context, request *autog
 		return nil, status.Error(codes.Internal, "GET_ASSIGNMENT")
 	}
 	config := assignment.ProgrammingConfig
-	go a.progGrader.GradeSubmission(id, submission, config)
+	notifyC := make(chan *model_pb.SubmissionReport)
+	go a.progGrader.GradeSubmission(id, submission, config, notifyC)
+	go func() {
+		<-notifyC
+		a.subsMu.Lock()
+		defer a.subsMu.Unlock()
+		for _, sub := range a.reportSubs[id] {
+			if sub != nil {
+				close(sub)
+			}
+		}
+		delete(a.reportSubs, id)
+	}()
 	return resp, nil
 }
 
@@ -126,6 +141,25 @@ func (a *AutograderService) StreamSubmissionLog(request *autograder_pb.StreamSub
 
 func (a *AutograderService) SubscribeSubmissions(request *autograder_pb.SubscribeSubmissionsRequest, server autograder_pb.AutograderService_SubscribeSubmissionsServer) error {
 	return nil
+}
+
+func (a *AutograderService) SubscribeSubmission(request *autograder_pb.SubscribeSubmissionRequest, server autograder_pb.AutograderService_SubscribeSubmissionServer) error {
+	c := make(chan struct{})
+	id := request.GetSubmissionId()
+	var idx int
+	a.subsMu.Lock()
+	a.reportSubs[id] = append(a.reportSubs[id], c)
+	idx = len(a.reportSubs) - 1
+	a.subsMu.Unlock()
+	select {
+	case <-server.Context().Done():
+		a.subsMu.Lock()
+		a.reportSubs[id][idx] = nil
+		a.subsMu.Unlock()
+		return nil
+	case <-c:
+		return server.Send(&autograder_pb.SubscribeSubmissionResponse{})
+	}
 }
 
 func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, request *autograder_pb.GetSubmissionsInAssignmentRequest) (*autograder_pb.GetSubmissionsInAssignmentResponse, error) {
@@ -271,5 +305,7 @@ func NewAutograderServiceServer() autograder_pb.AutograderServiceServer {
 		courseRepo:           repository.NewKVCourseRepository(db),
 		assignmentRepo:       repository.NewKVAssignmentRepository(db),
 		progGrader:           grader.NewDockerProgrammingGrader(srr),
+		reportSubs:           make(map[uint64][]chan struct{}),
+		subsMu:               &sync.Mutex{},
 	}
 }
