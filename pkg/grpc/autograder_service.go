@@ -13,9 +13,11 @@ import (
 	"github.com/golang-jwt/jwt"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/grpclog"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -32,14 +34,77 @@ type AutograderService struct {
 	assignmentRepo       repository.AssignmentRepository
 	courseRepo           repository.CourseRepository
 	progGrader           grader.ProgrammingGrader
-	reportSubs           map[uint64][]chan struct{}
+	reportSubs           map[uint64][]chan *model_pb.SubmissionReport
 	subsMu               *sync.Mutex
+}
+
+func walkDir(dirpath string, relpath string, node *autograder_pb.FileTreeNode) error {
+	f, err := os.Open(dirpath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	dirs, err := f.ReadDir(-1)
+	if err != nil {
+		return err
+	}
+	for _, dir := range dirs {
+		nodeType := autograder_pb.FileTreeNode_File
+		if dir.IsDir() {
+			nodeType = autograder_pb.FileTreeNode_Folder
+		}
+		p := filepath.Join(relpath, dir.Name())
+		node.Children = append(node.Children, &autograder_pb.FileTreeNode{Name: dir.Name(), NodeType: nodeType, Path: p})
+		child := node.Children[len(node.Children)-1]
+		if dir.IsDir() {
+			err = walkDir(filepath.Join(dirpath, dir.Name()), p, child)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (a *AutograderService) GetFilesInSubmission(ctx context.Context, request *autograder_pb.GetFilesInSubmissionRequest) (*autograder_pb.GetFilesInSubmissionResponse, error) {
+	submission, err := a.submissionRepo.GetSubmission(ctx, request.GetSubmissionId())
+	if err != nil {
+		return nil, status.Error(codes.NotFound, "NOT_FOUND")
+	}
+	subDir := submission.GetPath()
+	root := &autograder_pb.FileTreeNode{}
+	err = walkDir(subDir, "", root)
+	if err != nil {
+		grpclog.Errorf("failed to list files in %s: %v", subDir, err)
+		return nil, status.Error(codes.Internal, "WALK_DIR")
+	}
+	rootPB := &autograder_pb.GetFilesInSubmissionResponse{Roots: root.GetChildren()}
+	return rootPB, nil
+}
+
+func (a *AutograderService) GetCourse(ctx context.Context, request *autograder_pb.GetCourseRequest) (*autograder_pb.GetCourseResponse, error) {
+	course, err := a.courseRepo.GetCourse(ctx, request.GetCourseId())
+	resp := &autograder_pb.GetCourseResponse{Course: course}
+	return resp, err
+}
+
+func (a *AutograderService) GetAssignment(ctx context.Context, request *autograder_pb.GetAssignmentRequest) (*autograder_pb.GetAssignmentResponse, error) {
+	assignment, err := a.assignmentRepo.GetAssignment(ctx, request.GetAssignmentId())
+	resp := &autograder_pb.GetAssignmentResponse{Assignment: assignment}
+	return resp, err
 }
 
 func (a *AutograderService) GetSubmissionReport(ctx context.Context, request *autograder_pb.GetSubmissionReportRequest) (*autograder_pb.GetSubmissionReportResponse, error) {
 	submissionId := request.GetSubmissionId()
+	brief, err := a.submissionReportRepo.GetSubmissionBriefReport(ctx, submissionId)
+	if brief == nil {
+		return nil, status.Error(codes.NotFound, "NOT_FOUND")
+	}
+	if brief.GetStatus() == model_pb.SubmissionStatus_Running {
+		return nil, status.Error(codes.NotFound, "RUNNING")
+	}
 	report, err := a.submissionReportRepo.GetSubmissionReport(ctx, submissionId)
-	resp := &autograder_pb.GetSubmissionReportResponse{Report: report}
+	resp := &autograder_pb.GetSubmissionReportResponse{Report: report, Status: brief.GetStatus()}
 	return resp, err
 }
 
@@ -78,31 +143,33 @@ func (a *AutograderService) CreateSubmission(ctx context.Context, request *autog
 		Files:        files,
 	}
 	id, err := a.submissionRepo.CreateSubmission(ctx, submission)
+	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Running}
+	_ = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, id, brief)
+	_ = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, id, assignmentId)
 	resp := &autograder_pb.CreateSubmissionResponse{SubmissionId: id, Files: files}
-	assignment, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "GET_ASSIGNMENT")
-	}
-	config := assignment.ProgrammingConfig
-	notifyC := make(chan *model_pb.SubmissionReport)
-	go a.progGrader.GradeSubmission(id, submission, config, notifyC)
-	go func() {
-		<-notifyC
-		a.subsMu.Lock()
-		defer a.subsMu.Unlock()
-		for _, sub := range a.reportSubs[id] {
-			if sub != nil {
-				close(sub)
-			}
-		}
-		delete(a.reportSubs, id)
-	}()
+	go a.runSubmission(context.Background(), id, assignmentId)
 	return resp, nil
 }
 
 type ProtobufClaim struct {
 	jwt.StandardClaims
 	Payload string `json:"payload"`
+}
+
+func (a *AutograderService) signPayloadToken(key []byte, payload proto.Message) (string, error) {
+	raw, err := proto.Marshal(payload)
+	if err != nil {
+		return "", status.Error(codes.Internal, "PROTOBUF_MARSHAL")
+	}
+	now := time.Now()
+	expireAt := now.Add(1 * time.Minute)
+	claims := ProtobufClaim{Payload: base64.StdEncoding.EncodeToString(raw), StandardClaims: jwt.StandardClaims{IssuedAt: now.Unix(), ExpiresAt: expireAt.Unix()}}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
+	ss, err := token.SignedString(key)
+	if err != nil {
+		return "", status.Error(codes.Internal, "JWT_SIGN")
+	}
+	return ss, nil
 }
 
 func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_pb.InitUploadRequest) (*autograder_pb.InitUploadResponse, error) {
@@ -119,17 +186,9 @@ func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_
 		ManifestId: request.ManifestId,
 		Filename:   filepath.Clean(filename),
 	}
-	raw, err := proto.Marshal(payload)
+	ss, err := a.signPayloadToken(key, payload)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "PROTOBUF_MARSHAL")
-	}
-	now := time.Now()
-	expireAt := now.Add(1 * time.Minute)
-	claims := ProtobufClaim{Payload: base64.StdEncoding.EncodeToString(raw), StandardClaims: jwt.StandardClaims{IssuedAt: now.Unix(), ExpiresAt: expireAt.Unix()}}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
-	ss, err := token.SignedString(key)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "JWT_SIGN")
+		return nil, err
 	}
 	resp := &autograder_pb.InitUploadResponse{Token: ss}
 	return resp, nil
@@ -144,7 +203,9 @@ func (a *AutograderService) SubscribeSubmissions(request *autograder_pb.Subscrib
 }
 
 func (a *AutograderService) SubscribeSubmission(request *autograder_pb.SubscribeSubmissionRequest, server autograder_pb.AutograderService_SubscribeSubmissionServer) error {
-	c := make(chan struct{})
+	grpclog.Errorf("Subscribe %d", request.GetSubmissionId())
+	defer grpclog.Errorf("Unsubscribe %d", request.GetSubmissionId())
+	c := make(chan *model_pb.SubmissionReport)
 	id := request.GetSubmissionId()
 	var idx int
 	a.subsMu.Lock()
@@ -154,11 +215,17 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 	select {
 	case <-server.Context().Done():
 		a.subsMu.Lock()
-		a.reportSubs[id][idx] = nil
+		if len(a.reportSubs[id]) > idx {
+			a.reportSubs[id][idx] = nil
+		}
 		a.subsMu.Unlock()
 		return nil
-	case <-c:
-		return server.Send(&autograder_pb.SubscribeSubmissionResponse{})
+	case r := <-c:
+		return server.Send(&autograder_pb.SubscribeSubmissionResponse{
+			Score:    r.GetScore(),
+			MaxScore: r.GetMaxScore(),
+			Status:   model_pb.SubmissionStatus_Finished,
+		})
 	}
 }
 
@@ -174,14 +241,14 @@ func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, requ
 		if err != nil {
 			return nil, status.Error(codes.Internal, "GET_SUBMISSION")
 		}
-		report, err := a.submissionReportRepo.GetSubmissionReport(ctx, subId)
-		subStatus := autograder_pb.SubmissionStatus_Running
+		report, err := a.submissionReportRepo.GetSubmissionBriefReport(ctx, subId)
+		subStatus := model_pb.SubmissionStatus_Running
 		score := uint64(0)
 		maxScore := uint64(0)
 		if err == nil {
 			score = report.Score
 			maxScore = report.MaxScore
-			subStatus = autograder_pb.SubmissionStatus_Finished
+			subStatus = report.GetStatus()
 		}
 		var submitters []*autograder_pb.GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter
 		for _, uid := range sub.Submitters {
@@ -250,6 +317,7 @@ func (a *AutograderService) GetCourseList(ctx context.Context, request *autograd
 			Name:      course.Name,
 			ShortName: course.ShortName,
 			Role:      member.Role,
+			CourseId:  member.CourseId,
 		}
 		courses = append(courses, ret)
 	}
@@ -291,6 +359,48 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 	return response, nil
 }
 
+func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint64, assignmentId uint64) {
+	assignment, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
+	if err != nil {
+		grpclog.Errorf("failed to get assignment %d: %v", assignmentId, err)
+		return
+	}
+	submission, err := a.submissionRepo.GetSubmission(ctx, submissionId)
+	if err != nil {
+		grpclog.Errorf("failed to get submission %d: %v", submissionId, err)
+		return
+	}
+	config := assignment.ProgrammingConfig
+	notifyC := make(chan *model_pb.SubmissionReport)
+	go a.progGrader.GradeSubmission(submissionId, submission, config, notifyC)
+	go func() {
+		r := <-notifyC
+		a.subsMu.Lock()
+		subs := a.reportSubs[submissionId]
+		delete(a.reportSubs, submissionId)
+		a.subsMu.Unlock()
+		for _, sub := range subs {
+			if sub != nil {
+				sub <- r
+			}
+		}
+	}()
+}
+
+func (a *AutograderService) runUnfinishedSubmissions() {
+	ctx := context.Background()
+	ids, err := a.submissionReportRepo.GetUnfinishedSubmissions(ctx)
+	if err != nil {
+		panic(err)
+	}
+	for _, id := range ids {
+		asgnId := id.AssignmentId
+		subId := id.SubmissionId
+		grpclog.Errorf("found unfinished submission %d assignment %d", subId, asgnId)
+		go a.runSubmission(ctx, subId, asgnId)
+	}
+}
+
 func NewAutograderServiceServer() autograder_pb.AutograderServiceServer {
 	db, err := pebble.Open("db", &pebble.Options{Merger: repository.NewKVMerger()})
 	if err != nil {
@@ -305,7 +415,7 @@ func NewAutograderServiceServer() autograder_pb.AutograderServiceServer {
 		courseRepo:           repository.NewKVCourseRepository(db),
 		assignmentRepo:       repository.NewKVAssignmentRepository(db),
 		progGrader:           grader.NewDockerProgrammingGrader(srr),
-		reportSubs:           make(map[uint64][]chan struct{}),
+		reportSubs:           make(map[uint64][]chan *model_pb.SubmissionReport),
 		subsMu:               &sync.Mutex{},
 	}
 }

@@ -28,8 +28,8 @@ type DockerProgrammingGrader struct {
 	srr repository.SubmissionReportRepository
 }
 
-func (d *DockerProgrammingGrader) runDocker(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig) (internalError int64, exitCode int64, resultsJSONPath string) {
-	imgs, err := d.cli.ImageList(context.Background(), types.ImageListOptions{
+func (d *DockerProgrammingGrader) runDocker(ctx context.Context, submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig) (internalError int64, exitCode int64, resultsJSONPath string) {
+	imgs, err := d.cli.ImageList(ctx, types.ImageListOptions{
 		All:     false,
 		Filters: filters.NewArgs(filters.Arg("reference", fmt.Sprintf("%s", config.Image))),
 	})
@@ -39,7 +39,7 @@ func (d *DockerProgrammingGrader) runDocker(submissionId uint64, submission *mod
 		return
 	}
 	if len(imgs) == 0 {
-		closer, err := d.cli.ImagePull(context.Background(), config.Image, types.ImagePullOptions{})
+		closer, err := d.cli.ImagePull(ctx, config.Image, types.ImagePullOptions{})
 		if err != nil {
 			internalError = 1
 			grpclog.Errorf("failed to pull image for %d: %v", submissionId, err)
@@ -83,15 +83,15 @@ func (d *DockerProgrammingGrader) runDocker(submissionId uint64, submission *mod
 	}
 	netCfg := &network.NetworkingConfig{}
 	platform := &specs.Platform{Architecture: "amd64", OS: "linux"}
-	body, err := d.cli.ContainerCreate(context.Background(), ctCfg, hstCfg, netCfg, platform, "")
+	body, err := d.cli.ContainerCreate(ctx, ctCfg, hstCfg, netCfg, platform, "")
 	if err != nil {
 		internalError = 3
 		grpclog.Errorf("failed to create container for %d: %v", submissionId, err)
 		return
 	}
 	id := body.ID
-	doneC, errC := d.cli.ContainerWait(context.Background(), id, container.WaitConditionNextExit)
-	err = d.cli.ContainerStart(context.Background(), id, types.ContainerStartOptions{})
+	doneC, errC := d.cli.ContainerWait(ctx, id, container.WaitConditionNextExit)
+	err = d.cli.ContainerStart(ctx, id, types.ContainerStartOptions{})
 	if err != nil {
 		internalError = 4
 		grpclog.Errorf("failed to start container for %d: %v", submissionId, err)
@@ -105,14 +105,14 @@ func (d *DockerProgrammingGrader) runDocker(submissionId uint64, submission *mod
 	case <-doneC:
 
 	}
-	containerDetail, err := d.cli.ContainerInspect(context.Background(), id)
+	containerDetail, err := d.cli.ContainerInspect(ctx, id)
 	if err != nil {
 		internalError = 6
 		grpclog.Errorf("failed to inspect container for %d: %v", submissionId, err)
 		return
 	}
 	exitCode = int64(containerDetail.State.ExitCode)
-	err = d.cli.ContainerRemove(context.Background(), id, types.ContainerRemoveOptions{})
+	err = d.cli.ContainerRemove(ctx, id, types.ContainerRemoveOptions{})
 	if err != nil {
 		internalError = 7
 		grpclog.Errorf("failed to remove container for %d: %v", submissionId, err)
@@ -122,7 +122,12 @@ func (d *DockerProgrammingGrader) runDocker(submissionId uint64, submission *mod
 }
 
 func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig, notifyC chan *model_pb.SubmissionReport) {
-	internalError, exitCode, resultsJSONPath := d.runDocker(submissionId, submission, config)
+	briefPB := &model_pb.SubmissionBriefReport{
+		Status: model_pb.SubmissionStatus_Running,
+	}
+	ctx := context.Background()
+	_ = d.srr.UpdateSubmissionBriefReport(ctx, submissionId, briefPB)
+	internalError, exitCode, resultsJSONPath := d.runDocker(ctx, submissionId, submission, config)
 	resultsPB := &model_pb.SubmissionReport{}
 	var json []byte
 	var err error
@@ -158,11 +163,22 @@ func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submissio
 WriteReport:
 	resultsPB.InternalError = internalError
 	resultsPB.ExitCode = exitCode
-	err = d.srr.UpdateSubmissionReport(context.Background(), submissionId, resultsPB)
+	err = d.srr.UpdateSubmissionReport(ctx, submissionId, resultsPB)
 	if err != nil {
 		grpclog.Errorf("failed to update submission report for %d: %v", submissionId, err)
 	}
-
+	briefPB = &model_pb.SubmissionBriefReport{
+		Score:         resultsPB.Score,
+		MaxScore:      resultsPB.MaxScore,
+		ExitCode:      resultsPB.ExitCode,
+		InternalError: resultsPB.InternalError,
+		Status:        model_pb.SubmissionStatus_Finished,
+	}
+	err = d.srr.UpdateSubmissionBriefReport(ctx, submissionId, briefPB)
+	if err != nil {
+		grpclog.Errorf("failed to update submission brief report for %d: %v", submissionId, err)
+	}
+	_ = d.srr.DeleteUnfinishedSubmission(ctx, submissionId)
 	if notifyC != nil {
 		notifyC <- resultsPB
 	}

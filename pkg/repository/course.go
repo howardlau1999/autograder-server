@@ -3,7 +3,6 @@ package repository
 import (
 	model_pb "autograder-server/pkg/model/proto"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"github.com/cockroachdb/pebble"
 	"google.golang.org/protobuf/proto"
@@ -29,13 +28,7 @@ func (cr *KVCourseRepository) AddAssignment(ctx context.Context, courseId uint64
 
 func (cr *KVCourseRepository) GetAssignmentsByCourse(ctx context.Context, courseId uint64) ([]uint64, error) {
 	prefix := cr.getAssignmentPrefix(courseId)
-	prefixLen := len(prefix)
-	iter := cr.db.NewIter(PrefixIterOptions(prefix))
-	var assignments []uint64
-	for iter.First(); iter.Valid(); iter.Next() {
-		assignments = append(assignments, binary.BigEndian.Uint64(iter.Key()[prefixLen:]))
-	}
-	iter.Close()
+	assignments := ScanIds(cr.db, prefix)
 	return assignments, nil
 }
 

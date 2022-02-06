@@ -35,3 +35,14 @@ func Uint64ToBytes(v uint64) []byte {
 	binary.BigEndian.PutUint64(b, v)
 	return b
 }
+
+func ScanIds(db *pebble.DB, prefix []byte) []uint64 {
+	prefixLen := len(prefix)
+	iter := db.NewIter(PrefixIterOptions(prefix))
+	var ids []uint64
+	for iter.First(); iter.Valid(); iter.Next() {
+		ids = append(ids, binary.BigEndian.Uint64(iter.Key()[prefixLen:]))
+	}
+	iter.Close()
+	return ids
+}

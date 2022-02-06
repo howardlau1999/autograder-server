@@ -65,7 +65,6 @@ func (sr *KVSubmissionRepository) CreateSubmission(ctx context.Context, submissi
 		}
 	}
 	return id, batch.Commit(pebble.Sync)
-
 }
 
 func (sr *KVSubmissionRepository) GetSubmission(ctx context.Context, id uint64) (*model_pb.Submission, error) {
