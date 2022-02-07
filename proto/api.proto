@@ -136,6 +136,7 @@ message CreateSubmissionRequest {
   uint64 assignment_id = 2;
   uint64 manifest_id = 3;
   repeated uint64 submitters = 4;
+  string leaderboard_name = 5;
 }
 
 message CreateSubmissionResponse {
@@ -210,6 +211,34 @@ message GetFilesInSubmissionResponse {
   repeated FileTreeNode roots = 1;
 }
 
+message GetLeaderboardRequest {
+  uint64 assignment_id = 1;
+}
+
+message GetLeaderboardResponse {
+  repeated LeaderboardEntry entries = 1;
+}
+
+message HasLeaderboardRequest {
+  uint64 assignment_id = 1;
+}
+
+message HasLeaderboardResponse {
+  bool has_leaderboard = 1;
+}
+
+message CreateCourseRequest {
+  string name = 1;
+  string short_name = 2;
+  string description = 3;
+  uint64 user_id = 4;
+}
+
+message CreateCourseResponse {
+  uint64 course_id = 1;
+  Course course = 2;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -225,5 +254,8 @@ service AutograderService {
    rpc GetSubmissionReport(GetSubmissionReportRequest) returns (GetSubmissionReportResponse);
    rpc GetAssignment(GetAssignmentRequest) returns (GetAssignmentResponse);
    rpc GetCourse(GetCourseRequest) returns (GetCourseResponse);
+   rpc CreateCourse(CreateCourseRequest) returns (CreateCourseResponse);
    rpc GetFilesInSubmission(GetFilesInSubmissionRequest) returns (GetFilesInSubmissionResponse);
+   rpc GetLeaderboard(GetLeaderboardRequest) returns (GetLeaderboardResponse);
+   rpc HasLeaderboard(HasLeaderboardRequest) returns (HasLeaderboardResponse);
 }

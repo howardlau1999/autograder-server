@@ -63,7 +63,7 @@ func main() {
 		Role:     model_pb.CourseRole_Instructor,
 		CourseId: courseId,
 	}
-	err = userRepo.AddToCourse(context.Background(), member)
+	err = userRepo.AddCourse(context.Background(), member)
 	if err != nil {
 		panic(err)
 	}

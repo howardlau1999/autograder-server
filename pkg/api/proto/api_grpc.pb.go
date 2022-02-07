@@ -36,7 +36,10 @@ type AutograderServiceClient interface {
 	GetSubmissionReport(ctx context.Context, in *GetSubmissionReportRequest, opts ...grpc.CallOption) (*GetSubmissionReportResponse, error)
 	GetAssignment(ctx context.Context, in *GetAssignmentRequest, opts ...grpc.CallOption) (*GetAssignmentResponse, error)
 	GetCourse(ctx context.Context, in *GetCourseRequest, opts ...grpc.CallOption) (*GetCourseResponse, error)
+	CreateCourse(ctx context.Context, in *CreateCourseRequest, opts ...grpc.CallOption) (*CreateCourseResponse, error)
 	GetFilesInSubmission(ctx context.Context, in *GetFilesInSubmissionRequest, opts ...grpc.CallOption) (*GetFilesInSubmissionResponse, error)
+	GetLeaderboard(ctx context.Context, in *GetLeaderboardRequest, opts ...grpc.CallOption) (*GetLeaderboardResponse, error)
+	HasLeaderboard(ctx context.Context, in *HasLeaderboardRequest, opts ...grpc.CallOption) (*HasLeaderboardResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -265,9 +268,36 @@ func (c *autograderServiceClient) GetCourse(ctx context.Context, in *GetCourseRe
 	return out, nil
 }
 
+func (c *autograderServiceClient) CreateCourse(ctx context.Context, in *CreateCourseRequest, opts ...grpc.CallOption) (*CreateCourseResponse, error) {
+	out := new(CreateCourseResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/CreateCourse", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *autograderServiceClient) GetFilesInSubmission(ctx context.Context, in *GetFilesInSubmissionRequest, opts ...grpc.CallOption) (*GetFilesInSubmissionResponse, error) {
 	out := new(GetFilesInSubmissionResponse)
 	err := c.cc.Invoke(ctx, "/AutograderService/GetFilesInSubmission", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) GetLeaderboard(ctx context.Context, in *GetLeaderboardRequest, opts ...grpc.CallOption) (*GetLeaderboardResponse, error) {
+	out := new(GetLeaderboardResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GetLeaderboard", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) HasLeaderboard(ctx context.Context, in *HasLeaderboardRequest, opts ...grpc.CallOption) (*HasLeaderboardResponse, error) {
+	out := new(HasLeaderboardResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/HasLeaderboard", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +322,10 @@ type AutograderServiceServer interface {
 	GetSubmissionReport(context.Context, *GetSubmissionReportRequest) (*GetSubmissionReportResponse, error)
 	GetAssignment(context.Context, *GetAssignmentRequest) (*GetAssignmentResponse, error)
 	GetCourse(context.Context, *GetCourseRequest) (*GetCourseResponse, error)
+	CreateCourse(context.Context, *CreateCourseRequest) (*CreateCourseResponse, error)
 	GetFilesInSubmission(context.Context, *GetFilesInSubmissionRequest) (*GetFilesInSubmissionResponse, error)
+	GetLeaderboard(context.Context, *GetLeaderboardRequest) (*GetLeaderboardResponse, error)
+	HasLeaderboard(context.Context, *HasLeaderboardRequest) (*HasLeaderboardResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -342,8 +375,17 @@ func (UnimplementedAutograderServiceServer) GetAssignment(context.Context, *GetA
 func (UnimplementedAutograderServiceServer) GetCourse(context.Context, *GetCourseRequest) (*GetCourseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCourse not implemented")
 }
+func (UnimplementedAutograderServiceServer) CreateCourse(context.Context, *CreateCourseRequest) (*CreateCourseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateCourse not implemented")
+}
 func (UnimplementedAutograderServiceServer) GetFilesInSubmission(context.Context, *GetFilesInSubmissionRequest) (*GetFilesInSubmissionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFilesInSubmission not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetLeaderboard(context.Context, *GetLeaderboardRequest) (*GetLeaderboardResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetLeaderboard not implemented")
+}
+func (UnimplementedAutograderServiceServer) HasLeaderboard(context.Context, *HasLeaderboardRequest) (*HasLeaderboardResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HasLeaderboard not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -622,6 +664,24 @@ func _AutograderService_GetCourse_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_CreateCourse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateCourseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).CreateCourse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/CreateCourse",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).CreateCourse(ctx, req.(*CreateCourseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AutograderService_GetFilesInSubmission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetFilesInSubmissionRequest)
 	if err := dec(in); err != nil {
@@ -636,6 +696,42 @@ func _AutograderService_GetFilesInSubmission_Handler(srv interface{}, ctx contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AutograderServiceServer).GetFilesInSubmission(ctx, req.(*GetFilesInSubmissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_GetLeaderboard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLeaderboardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GetLeaderboard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GetLeaderboard",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GetLeaderboard(ctx, req.(*GetLeaderboardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_HasLeaderboard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HasLeaderboardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).HasLeaderboard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/HasLeaderboard",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).HasLeaderboard(ctx, req.(*HasLeaderboardRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -688,8 +784,20 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AutograderService_GetCourse_Handler,
 		},
 		{
+			MethodName: "CreateCourse",
+			Handler:    _AutograderService_CreateCourse_Handler,
+		},
+		{
 			MethodName: "GetFilesInSubmission",
 			Handler:    _AutograderService_GetFilesInSubmission_Handler,
+		},
+		{
+			MethodName: "GetLeaderboard",
+			Handler:    _AutograderService_GetLeaderboard_Handler,
+		},
+		{
+			MethodName: "HasLeaderboard",
+			Handler:    _AutograderService_HasLeaderboard_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -33,9 +33,45 @@ type AutograderService struct {
 	submissionReportRepo repository.SubmissionReportRepository
 	assignmentRepo       repository.AssignmentRepository
 	courseRepo           repository.CourseRepository
+	leaderboardRepo      repository.LeaderboardRepository
 	progGrader           grader.ProgrammingGrader
 	reportSubs           map[uint64][]chan *model_pb.SubmissionReport
 	subsMu               *sync.Mutex
+}
+
+func (a *AutograderService) CreateCourse(ctx context.Context, request *autograder_pb.CreateCourseRequest) (*autograder_pb.CreateCourseResponse, error) {
+	resp := &autograder_pb.CreateCourseResponse{}
+	course := &model_pb.Course{Name: request.GetName(), ShortName: request.GetShortName(), Description: request.GetDescription()}
+	courseId, err := a.courseRepo.CreateCourse(ctx, course)
+	if err != nil {
+		grpclog.Errorf("failed to create course: %v", err)
+		return nil, status.Error(codes.Internal, "CREATE_COURSE")
+	}
+	member := &model_pb.CourseMember{UserId: request.GetUserId(), CourseId: courseId, Role: model_pb.CourseRole_Instructor}
+	err = a.courseRepo.AddUser(ctx, member)
+	if err != nil {
+		grpclog.Errorf("failed to add user to course: %v", err)
+		return nil, status.Error(codes.Internal, "ADD_USER")
+	}
+	err = a.userRepo.AddCourse(ctx, member)
+	if err != nil {
+		grpclog.Errorf("failed to add course to user: %v", err)
+		return nil, status.Error(codes.Internal, "ADD_COURSE")
+	}
+	return resp, nil
+}
+
+func (a *AutograderService) HasLeaderboard(ctx context.Context, request *autograder_pb.HasLeaderboardRequest) (*autograder_pb.HasLeaderboardResponse, error) {
+	resp := &autograder_pb.HasLeaderboardResponse{
+		HasLeaderboard: a.leaderboardRepo.HasLeaderboard(ctx, request.GetAssignmentId()),
+	}
+	return resp, nil
+}
+
+func (a *AutograderService) GetLeaderboard(ctx context.Context, request *autograder_pb.GetLeaderboardRequest) (*autograder_pb.GetLeaderboardResponse, error) {
+	entries, err := a.leaderboardRepo.GetLeaderboard(ctx, request.GetAssignmentId())
+	resp := &autograder_pb.GetLeaderboardResponse{Entries: entries}
+	return resp, err
 }
 
 func walkDir(dirpath string, relpath string, node *autograder_pb.FileTreeNode) error {
@@ -136,11 +172,13 @@ func (a *AutograderService) CreateSubmission(ctx context.Context, request *autog
 		return nil, status.Errorf(codes.Internal, "DELETE_MANIFEST")
 	}
 	submission := &model_pb.Submission{
-		AssignmentId: assignmentId,
-		SubmittedAt:  timestamppb.Now(),
-		Submitters:   submitters,
-		Path:         path,
-		Files:        files,
+		AssignmentId:    assignmentId,
+		SubmittedAt:     timestamppb.Now(),
+		Submitters:      submitters,
+		Path:            path,
+		Files:           files,
+		LeaderboardName: request.GetLeaderboardName(),
+		UserId:          request.GetUserId(),
 	}
 	id, err := a.submissionRepo.CreateSubmission(ctx, submission)
 	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Running}
@@ -384,6 +422,15 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 				sub <- r
 			}
 		}
+		if len(r.Leaderboard) > 0 {
+			if err := a.leaderboardRepo.UpdateLeaderboardEntry(ctx, assignmentId, submission.GetUserId(), &model_pb.LeaderboardEntry{
+				SubmissionId: submissionId,
+				Nickname:     submission.GetLeaderboardName(),
+				Items:        r.Leaderboard,
+			}); err != nil {
+				grpclog.Errorf("failed to update leaderboard: %v", err)
+			}
+		}
 	}()
 }
 
@@ -415,6 +462,7 @@ func NewAutograderServiceServer() autograder_pb.AutograderServiceServer {
 		courseRepo:           repository.NewKVCourseRepository(db),
 		assignmentRepo:       repository.NewKVAssignmentRepository(db),
 		progGrader:           grader.NewDockerProgrammingGrader(srr),
+		leaderboardRepo:      repository.NewKVLeaderboardRepository(db),
 		reportSubs:           make(map[uint64][]chan *model_pb.SubmissionReport),
 		subsMu:               &sync.Mutex{},
 	}

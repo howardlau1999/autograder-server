@@ -14,7 +14,7 @@ type UserRepository interface {
 	UpdateUser(ctx context.Context, id uint64, user *model_pb.User) error
 	GetUserByUsername(ctx context.Context, username string) (*model_pb.User, uint64, error)
 	GetUserById(ctx context.Context, id uint64) (*model_pb.User, error)
-	AddToCourse(ctx context.Context, member *model_pb.CourseMember) error
+	AddCourse(ctx context.Context, member *model_pb.CourseMember) error
 	GetCoursesByUser(ctx context.Context, userId uint64) ([]*model_pb.CourseMember, error)
 }
 
@@ -39,7 +39,7 @@ func (ur *KVUserRepository) GetCoursesByUser(ctx context.Context, userId uint64)
 	return courses, nil
 }
 
-func (ur *KVUserRepository) AddToCourse(ctx context.Context, member *model_pb.CourseMember) error {
+func (ur *KVUserRepository) AddCourse(ctx context.Context, member *model_pb.CourseMember) error {
 	raw, err := proto.Marshal(member)
 	if err != nil {
 		return err

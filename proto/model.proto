@@ -2,6 +2,7 @@ syntax = "proto3";
 option go_package = "autograder-server/pkg/model/proto";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 
 message User {
   string username = 1;
@@ -81,12 +82,16 @@ enum TestcaseVisibility {
 
 message LeaderboardItem {
   string name = 1;
-  string value = 2;
-  string order = 3;
+  google.protobuf.Value value = 2;
+  enum Order {
+    Asc = 0;
+    Desc = 1;
+  }
+  Order order = 3;
 }
 
 message LeaderboardEntry {
-  uint64 user_id = 1;
+  uint64 submission_id = 1;
   string nickname = 2;
   repeated LeaderboardItem items = 3;
 }
@@ -131,6 +136,8 @@ message Submission {
   repeated uint64 submitters = 3;
   string path = 4;
   repeated string files = 5;
+  string leaderboard_name = 6;
+  uint64 user_id = 7;
 }
 
 message SubmissionEntry {
