@@ -12,6 +12,14 @@ import (
 type LocalStorage struct {
 }
 
+func (ls *LocalStorage) Delete(ctx context.Context, path string) error {
+	return os.Remove(path)
+}
+
+func (ls *LocalStorage) Open(ctx context.Context, path string) (io.ReadCloser, error) {
+	return os.Open(path)
+}
+
 func (ls *LocalStorage) Put(ctx context.Context, path string, r io.ReadSeeker) error {
 	cwd, err := os.Getwd()
 	if err != nil {

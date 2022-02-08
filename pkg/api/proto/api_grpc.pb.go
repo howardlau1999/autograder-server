@@ -40,6 +40,9 @@ type AutograderServiceClient interface {
 	GetFilesInSubmission(ctx context.Context, in *GetFilesInSubmissionRequest, opts ...grpc.CallOption) (*GetFilesInSubmissionResponse, error)
 	GetLeaderboard(ctx context.Context, in *GetLeaderboardRequest, opts ...grpc.CallOption) (*GetLeaderboardResponse, error)
 	HasLeaderboard(ctx context.Context, in *HasLeaderboardRequest, opts ...grpc.CallOption) (*HasLeaderboardResponse, error)
+	CreateAssignment(ctx context.Context, in *CreateAssignmentRequest, opts ...grpc.CallOption) (*CreateAssignmentResponse, error)
+	DeleteFileInManifest(ctx context.Context, in *DeleteFileInManifestRequest, opts ...grpc.CallOption) (*DeleteFileInManifestResponse, error)
+	InitDownload(ctx context.Context, in *InitDownloadRequest, opts ...grpc.CallOption) (*InitDownloadResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -304,6 +307,33 @@ func (c *autograderServiceClient) HasLeaderboard(ctx context.Context, in *HasLea
 	return out, nil
 }
 
+func (c *autograderServiceClient) CreateAssignment(ctx context.Context, in *CreateAssignmentRequest, opts ...grpc.CallOption) (*CreateAssignmentResponse, error) {
+	out := new(CreateAssignmentResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/CreateAssignment", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) DeleteFileInManifest(ctx context.Context, in *DeleteFileInManifestRequest, opts ...grpc.CallOption) (*DeleteFileInManifestResponse, error) {
+	out := new(DeleteFileInManifestResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/DeleteFileInManifest", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) InitDownload(ctx context.Context, in *InitDownloadRequest, opts ...grpc.CallOption) (*InitDownloadResponse, error) {
+	out := new(InitDownloadResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/InitDownload", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -326,6 +356,9 @@ type AutograderServiceServer interface {
 	GetFilesInSubmission(context.Context, *GetFilesInSubmissionRequest) (*GetFilesInSubmissionResponse, error)
 	GetLeaderboard(context.Context, *GetLeaderboardRequest) (*GetLeaderboardResponse, error)
 	HasLeaderboard(context.Context, *HasLeaderboardRequest) (*HasLeaderboardResponse, error)
+	CreateAssignment(context.Context, *CreateAssignmentRequest) (*CreateAssignmentResponse, error)
+	DeleteFileInManifest(context.Context, *DeleteFileInManifestRequest) (*DeleteFileInManifestResponse, error)
+	InitDownload(context.Context, *InitDownloadRequest) (*InitDownloadResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -386,6 +419,15 @@ func (UnimplementedAutograderServiceServer) GetLeaderboard(context.Context, *Get
 }
 func (UnimplementedAutograderServiceServer) HasLeaderboard(context.Context, *HasLeaderboardRequest) (*HasLeaderboardResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HasLeaderboard not implemented")
+}
+func (UnimplementedAutograderServiceServer) CreateAssignment(context.Context, *CreateAssignmentRequest) (*CreateAssignmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateAssignment not implemented")
+}
+func (UnimplementedAutograderServiceServer) DeleteFileInManifest(context.Context, *DeleteFileInManifestRequest) (*DeleteFileInManifestResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteFileInManifest not implemented")
+}
+func (UnimplementedAutograderServiceServer) InitDownload(context.Context, *InitDownloadRequest) (*InitDownloadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InitDownload not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -736,6 +778,60 @@ func _AutograderService_HasLeaderboard_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_CreateAssignment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateAssignmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).CreateAssignment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/CreateAssignment",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).CreateAssignment(ctx, req.(*CreateAssignmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_DeleteFileInManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteFileInManifestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).DeleteFileInManifest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/DeleteFileInManifest",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).DeleteFileInManifest(ctx, req.(*DeleteFileInManifestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_InitDownload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InitDownloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).InitDownload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/InitDownload",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).InitDownload(ctx, req.(*InitDownloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -798,6 +894,18 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "HasLeaderboard",
 			Handler:    _AutograderService_HasLeaderboard_Handler,
+		},
+		{
+			MethodName: "CreateAssignment",
+			Handler:    _AutograderService_CreateAssignment_Handler,
+		},
+		{
+			MethodName: "DeleteFileInManifest",
+			Handler:    _AutograderService_DeleteFileInManifest_Handler,
+		},
+		{
+			MethodName: "InitDownload",
+			Handler:    _AutograderService_InitDownload_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

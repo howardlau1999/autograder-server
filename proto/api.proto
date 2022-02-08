@@ -157,6 +157,11 @@ message UserTokenPayload {
   string username = 2;
 }
 
+message DownloadTokenPayload {
+  string real_path = 1;
+  string filename = 2;
+}
+
 message GetSubmissionReportRequest {
   uint64 submission_id = 1;
 }
@@ -239,6 +244,49 @@ message CreateCourseResponse {
   Course course = 2;
 }
 
+message CreateAssignmentRequest {
+  string name = 1;
+  uint64 course_id = 2;
+  AssignmentType assignment_type = 3;
+  google.protobuf.Timestamp release_date = 4;
+  google.protobuf.Timestamp due_date = 5;
+  google.protobuf.Timestamp late_due_date = 6;
+  string description = 7;
+  ProgrammingAssignmentConfig programming_config = 8;
+}
+
+message CreateAssignmentResponse {
+  Assignment assignment = 1;
+  uint64 assignment_id = 2;
+}
+
+message DeleteFileInManifestRequest {
+  uint64 manifest_id = 1;
+  string filename = 2;
+}
+
+message DeleteFileInManifestResponse {
+
+}
+
+message InitDownloadRequest {
+  uint64 submission_id = 1;
+  string filename = 2;
+}
+
+enum DownloadFileType {
+  Binary = 0;
+  Text = 1;
+  Image = 2;
+  PDF = 3;
+}
+
+message InitDownloadResponse {
+  string token = 1;
+  DownloadFileType file_type = 2;
+  string filename = 3;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -258,4 +306,7 @@ service AutograderService {
    rpc GetFilesInSubmission(GetFilesInSubmissionRequest) returns (GetFilesInSubmissionResponse);
    rpc GetLeaderboard(GetLeaderboardRequest) returns (GetLeaderboardResponse);
    rpc HasLeaderboard(HasLeaderboardRequest) returns (HasLeaderboardResponse);
+   rpc CreateAssignment(CreateAssignmentRequest) returns (CreateAssignmentResponse);
+   rpc DeleteFileInManifest(DeleteFileInManifestRequest) returns (DeleteFileInManifestResponse);
+   rpc InitDownload(InitDownloadRequest) returns (InitDownloadResponse);
 }

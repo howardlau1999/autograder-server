@@ -5,10 +5,12 @@ import (
 	"autograder-server/pkg/grader"
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/repository"
+	"autograder-server/pkg/storage"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"github.com/cockroachdb/pebble"
+	"github.com/go-chi/chi"
 	"github.com/gogo/protobuf/sortkeys"
 	"github.com/golang-jwt/jwt"
 	"golang.org/x/crypto/bcrypt"
@@ -17,7 +19,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,8 +39,91 @@ type AutograderService struct {
 	courseRepo           repository.CourseRepository
 	leaderboardRepo      repository.LeaderboardRepository
 	progGrader           grader.ProgrammingGrader
+	ls                   *storage.LocalStorage
 	reportSubs           map[uint64][]chan *model_pb.SubmissionReport
 	subsMu               *sync.Mutex
+}
+
+func (a *AutograderService) InitDownload(ctx context.Context, request *autograder_pb.InitDownloadRequest) (*autograder_pb.InitDownloadResponse, error) {
+	filename := request.GetFilename()
+	if isFilenameInvalid(filename) {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
+	}
+	submissionId := request.GetSubmissionId()
+	sub, err := a.submissionRepo.GetSubmission(ctx, submissionId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_SUBMISSION_ID")
+	}
+	realpath := filepath.Join(sub.GetPath(), filename)
+	_, fn := path.Split(filename)
+	file, err := a.ls.Open(ctx, realpath)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "OPEN_FILE")
+	}
+	defer file.Close()
+	head := make([]byte, 512)
+	file.Read(head)
+	fileType := http.DetectContentType(head)
+	fileTypePB := autograder_pb.DownloadFileType_Binary
+	if fileType == "application/pdf" {
+		fileTypePB = autograder_pb.DownloadFileType_PDF
+	} else if strings.HasPrefix(fileType, "image/") {
+		fileTypePB = autograder_pb.DownloadFileType_Image
+	} else if strings.HasPrefix(fileType, "text/plain") {
+		fileTypePB = autograder_pb.DownloadFileType_Text
+	}
+	payloadPB := &autograder_pb.DownloadTokenPayload{RealPath: realpath, Filename: fn}
+	ss, err := a.signPayloadToken([]byte("download-token-sign-key"), payloadPB)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "SIGN_JWT")
+	}
+	resp := &autograder_pb.InitDownloadResponse{FileType: fileTypePB, Token: ss, Filename: fn}
+	return resp, nil
+
+}
+
+func isFilenameInvalid(filename string) bool {
+	return len(filename) == 0 || strings.Contains(filename, "..") || filepath.IsAbs(filename)
+}
+
+func (a *AutograderService) getManifestPath(manifestId uint64) string {
+	return fmt.Sprintf("uploads/manifests/%d", manifestId)
+}
+
+func (a *AutograderService) DeleteFileInManifest(ctx context.Context, request *autograder_pb.DeleteFileInManifestRequest) (*autograder_pb.DeleteFileInManifestResponse, error) {
+	filename := request.GetFilename()
+	if isFilenameInvalid(filename) {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
+	}
+	manifestId := request.GetManifestId()
+	err := a.ls.Delete(ctx, filepath.Join(a.getManifestPath(manifestId), filename))
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "DELETE_FAILED")
+	}
+	return &autograder_pb.DeleteFileInManifestResponse{}, nil
+}
+
+func (a *AutograderService) CreateAssignment(ctx context.Context, request *autograder_pb.CreateAssignmentRequest) (*autograder_pb.CreateAssignmentResponse, error) {
+	resp := &autograder_pb.CreateAssignmentResponse{}
+	assignment := &model_pb.Assignment{}
+	assignment.Name = request.GetName()
+	assignment.ReleaseDate = request.GetReleaseDate()
+	assignment.DueDate = request.GetDueDate()
+	assignment.AssignmentType = request.GetAssignmentType()
+	assignment.Description = request.GetDescription()
+	assignment.CourseId = request.GetCourseId()
+	assignment.ProgrammingConfig = request.GetProgrammingConfig()
+	assignmentId, err := a.assignmentRepo.CreateAssignment(ctx, assignment)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "CREATE_ASSIGNMENT")
+	}
+	resp.Assignment = assignment
+	resp.AssignmentId = assignmentId
+	err = a.courseRepo.AddAssignment(ctx, request.GetCourseId(), assignmentId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "ADD_ASSIGNMENT")
+	}
+	return resp, nil
 }
 
 func (a *AutograderService) CreateCourse(ctx context.Context, request *autograder_pb.CreateCourseRequest) (*autograder_pb.CreateCourseResponse, error) {
@@ -89,7 +176,7 @@ func walkDir(dirpath string, relpath string, node *autograder_pb.FileTreeNode) e
 		if dir.IsDir() {
 			nodeType = autograder_pb.FileTreeNode_Folder
 		}
-		p := filepath.Join(relpath, dir.Name())
+		p := path.Join(relpath, dir.Name())
 		node.Children = append(node.Children, &autograder_pb.FileTreeNode{Name: dir.Name(), NodeType: nodeType, Path: p})
 		child := node.Children[len(node.Children)-1]
 		if dir.IsDir() {
@@ -184,6 +271,7 @@ func (a *AutograderService) CreateSubmission(ctx context.Context, request *autog
 	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Running}
 	_ = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, id, brief)
 	_ = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, id, assignmentId)
+	_ = a.manifestRepo.DeleteManifest(manifestId)
 	resp := &autograder_pb.CreateSubmissionResponse{SubmissionId: id, Files: files}
 	go a.runSubmission(context.Background(), id, assignmentId)
 	return resp, nil
@@ -211,18 +299,20 @@ func (a *AutograderService) signPayloadToken(key []byte, payload proto.Message) 
 }
 
 func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_pb.InitUploadRequest) (*autograder_pb.InitUploadResponse, error) {
-	_, err := a.manifestRepo.AddFileToManifest(request.GetFilename(), request.GetManifestId())
+	filename := request.GetFilename()
+	if isFilenameInvalid(filename) {
+
+		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
+	}
+	_, err := a.manifestRepo.AddFileToManifest(filename, request.GetManifestId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to add file to manifest")
 	}
-	key := []byte("upload-token-sign-secret")
-	filename := request.GetFilename()
-	if strings.Contains(filename, "..") || filepath.IsAbs(filename) {
-		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
-	}
+	key := []byte("upload-token-sign-key")
+
 	payload := &autograder_pb.UploadTokenPayload{
 		ManifestId: request.ManifestId,
-		Filename:   filepath.Clean(filename),
+		Filename:   path.Clean(filename),
 	}
 	ss, err := a.signPayloadToken(key, payload)
 	if err != nil {
@@ -241,8 +331,6 @@ func (a *AutograderService) SubscribeSubmissions(request *autograder_pb.Subscrib
 }
 
 func (a *AutograderService) SubscribeSubmission(request *autograder_pb.SubscribeSubmissionRequest, server autograder_pb.AutograderService_SubscribeSubmissionServer) error {
-	grpclog.Errorf("Subscribe %d", request.GetSubmissionId())
-	defer grpclog.Errorf("Unsubscribe %d", request.GetSubmissionId())
 	c := make(chan *model_pb.SubmissionReport)
 	id := request.GetSubmissionId()
 	var idx int
@@ -448,7 +536,113 @@ func (a *AutograderService) runUnfinishedSubmissions() {
 	}
 }
 
-func NewAutograderServiceServer() autograder_pb.AutograderServiceServer {
+func parseTokenPayload(key []byte, tokenString string) ([]byte, error) {
+	uploadToken, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected singning method: %v", token.Header["alg"])
+		}
+
+		return key, nil
+	})
+	if err != nil {
+		grpclog.Errorf("failed to parse: %v", err)
+		return nil, err
+	}
+
+	claims, ok := uploadToken.Claims.(jwt.MapClaims)
+	if !ok || !uploadToken.Valid || claims.Valid() != nil {
+		grpclog.Errorf("not valid")
+		return nil, err
+	}
+	payloadString, ok := claims["payload"].(string)
+	if !ok {
+		grpclog.Errorf("no payload")
+		return nil, err
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(payloadString)
+	if err != nil {
+		grpclog.Errorf("base64: %v", err)
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Request) {
+	downloadTokenString := strings.TrimSpace(r.URL.Query().Get("token"))
+	fn := chi.URLParam(r, "filename")
+	payload, err := parseTokenPayload([]byte("download-token-sign-key"), downloadTokenString)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	var payloadPB autograder_pb.DownloadTokenPayload
+	err = proto.Unmarshal(payload, &payloadPB)
+	if err != nil || fn != payloadPB.GetFilename() {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	http.ServeFile(w, r, payloadPB.GetRealPath())
+}
+
+func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
+	var err error
+	normalizedContentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-type")))
+	uploadTokenString := strings.TrimSpace(r.Header.Get("Upload-token"))
+	payload, err := parseTokenPayload([]byte("upload-token-sign-key"), uploadTokenString)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	var payloadPB autograder_pb.UploadTokenPayload
+	err = proto.Unmarshal(payload, &payloadPB)
+	if err != nil {
+		grpclog.Errorf("proto: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if !strings.HasPrefix(normalizedContentType, "multipart/form-data; boundary") {
+		grpclog.Errorf("malformed form")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	err = r.ParseMultipartForm(10 * 1024 * 1024)
+	if err != nil {
+		grpclog.Errorf("Parse upload multipart form error: %v\n", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	uploadFile, header, err := r.FormFile("file")
+	if err != nil {
+		grpclog.Errorf("Get form file error: %v\n", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	fileHeader := make([]byte, 512)
+	_, err = uploadFile.Read(fileHeader)
+	_, err = uploadFile.Seek(0, 0)
+	fileContentType := http.DetectContentType(fileHeader)
+	grpclog.Errorf("filename = %v, mime_header = %v, detected_content_type = %s",
+		payloadPB.Filename, header.Header, fileContentType)
+	destPath := filepath.Join(a.getManifestPath(payloadPB.GetManifestId()), payloadPB.Filename)
+	err = a.ls.Put(
+		r.Context(),
+		destPath,
+		uploadFile,
+	)
+	if err != nil {
+		grpclog.Errorf("failed to put file: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	return
+}
+
+func NewAutograderServiceServer(ls *storage.LocalStorage) *AutograderService {
 	db, err := pebble.Open("db", &pebble.Options{Merger: repository.NewKVMerger()})
 	if err != nil {
 		panic(err)
@@ -463,6 +657,7 @@ func NewAutograderServiceServer() autograder_pb.AutograderServiceServer {
 		assignmentRepo:       repository.NewKVAssignmentRepository(db),
 		progGrader:           grader.NewDockerProgrammingGrader(srr),
 		leaderboardRepo:      repository.NewKVLeaderboardRepository(db),
+		ls:                   ls,
 		reportSubs:           make(map[uint64][]chan *model_pb.SubmissionReport),
 		subsMu:               &sync.Mutex{},
 	}
