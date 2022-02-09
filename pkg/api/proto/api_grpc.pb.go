@@ -40,6 +40,7 @@ type AutograderServiceClient interface {
 	CreateAssignment(ctx context.Context, in *CreateAssignmentRequest, opts ...grpc.CallOption) (*CreateAssignmentResponse, error)
 	DeleteFileInManifest(ctx context.Context, in *DeleteFileInManifestRequest, opts ...grpc.CallOption) (*DeleteFileInManifestResponse, error)
 	InitDownload(ctx context.Context, in *InitDownloadRequest, opts ...grpc.CallOption) (*InitDownloadResponse, error)
+	GetCourseMembers(ctx context.Context, in *GetCourseMembersRequest, opts ...grpc.CallOption) (*GetCourseMembersResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -235,6 +236,15 @@ func (c *autograderServiceClient) InitDownload(ctx context.Context, in *InitDown
 	return out, nil
 }
 
+func (c *autograderServiceClient) GetCourseMembers(ctx context.Context, in *GetCourseMembersRequest, opts ...grpc.CallOption) (*GetCourseMembersResponse, error) {
+	out := new(GetCourseMembersResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GetCourseMembers", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -257,6 +267,7 @@ type AutograderServiceServer interface {
 	CreateAssignment(context.Context, *CreateAssignmentRequest) (*CreateAssignmentResponse, error)
 	DeleteFileInManifest(context.Context, *DeleteFileInManifestRequest) (*DeleteFileInManifestResponse, error)
 	InitDownload(context.Context, *InitDownloadRequest) (*InitDownloadResponse, error)
+	GetCourseMembers(context.Context, *GetCourseMembersRequest) (*GetCourseMembersResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -317,6 +328,9 @@ func (UnimplementedAutograderServiceServer) DeleteFileInManifest(context.Context
 }
 func (UnimplementedAutograderServiceServer) InitDownload(context.Context, *InitDownloadRequest) (*InitDownloadResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InitDownload not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetCourseMembers(context.Context, *GetCourseMembersRequest) (*GetCourseMembersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCourseMembers not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -658,6 +672,24 @@ func _AutograderService_InitDownload_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_GetCourseMembers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCourseMembersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GetCourseMembers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GetCourseMembers",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GetCourseMembers(ctx, req.(*GetCourseMembersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -732,6 +764,10 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InitDownload",
 			Handler:    _AutograderService_InitDownload_Handler,
+		},
+		{
+			MethodName: "GetCourseMembers",
+			Handler:    _AutograderService_GetCourseMembers_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

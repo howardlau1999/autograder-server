@@ -281,6 +281,21 @@ message InitDownloadResponse {
   string filename = 3;
 }
 
+message GetCourseMembersRequest {
+  uint64 course_id = 1;
+}
+
+message GetCourseMembersResponse {
+  message MemberInfo {
+    uint64 user_id = 1;
+    string username = 2;
+    string email = 3;
+    string nickname = 4;
+    CourseRole role = 5;
+  }
+  repeated MemberInfo members = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -300,4 +315,5 @@ service AutograderService {
    rpc CreateAssignment(CreateAssignmentRequest) returns (CreateAssignmentResponse);
    rpc DeleteFileInManifest(DeleteFileInManifestRequest) returns (DeleteFileInManifestResponse);
    rpc InitDownload(InitDownloadRequest) returns (InitDownloadResponse);
+   rpc GetCourseMembers(GetCourseMembersRequest) returns (GetCourseMembersResponse);
 }

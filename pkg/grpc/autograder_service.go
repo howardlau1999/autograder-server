@@ -53,6 +53,34 @@ var DownloadJWTSignKey = []byte("download-token-sign-key")
 var UploadJWTSignKey = []byte("upload-token-sign-key")
 var UserJWTSignKey = []byte("user-token-sign-key")
 
+func (a *AutograderService) GetCourseMembers(ctx context.Context, request *autograder_pb.GetCourseMembersRequest) (*autograder_pb.GetCourseMembersResponse, error) {
+	l := ctxzap.Extract(ctx)
+	courseId := request.GetCourseId()
+	members, err := a.courseRepo.GetUsersByCourse(ctx, request.GetCourseId())
+	if err != nil {
+		l.Error("GetCourseMembers.GetUsersByCourse", zap.Uint64("courseId", courseId), zap.Error(err))
+		return nil, status.Error(codes.Internal, "GET_USERS")
+	}
+	var respMembers []*autograder_pb.GetCourseMembersResponse_MemberInfo
+	resp := &autograder_pb.GetCourseMembersResponse{}
+	for _, member := range members {
+		userId := member.GetUserId()
+		user, err := a.userRepo.GetUserById(ctx, userId)
+		if err != nil {
+			l.Error("GetCourseMembers.GetUserById", zap.Uint64("userId", userId), zap.Error(err))
+		}
+		respMembers = append(respMembers, &autograder_pb.GetCourseMembersResponse_MemberInfo{
+			Username: user.GetUsername(),
+			UserId:   userId,
+			Role:     member.GetRole(),
+			Email:    user.GetEmail(),
+			Nickname: user.GetNickname(),
+		})
+	}
+	resp.Members = respMembers
+	return resp, nil
+}
+
 func (a *AutograderService) InitDownload(ctx context.Context, request *autograder_pb.InitDownloadRequest) (*autograder_pb.InitDownloadResponse, error) {
 	filename := request.GetFilename()
 	if isFilenameInvalid(filename) {

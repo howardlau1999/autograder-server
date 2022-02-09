@@ -196,8 +196,9 @@ func (a *AutograderService) initAuthFuncs() {
 
 			Methods: []string{
 				"CreateAssignment",
+				"GetCourseMembers",
 			},
-			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse},
+			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireCourseWrite},
 		},
 		{
 			Methods: []string{
