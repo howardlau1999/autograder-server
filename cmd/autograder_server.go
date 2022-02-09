@@ -7,15 +7,28 @@ import (
 	"autograder-server/pkg/storage"
 	"github.com/go-chi/chi"
 	chiMiddleware "github.com/go-chi/chi/middleware"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
+	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
+	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
+	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/improbable-eng/grpc-web/go/grpcweb"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
 	"net/http"
 	"time"
 )
 
+var (
+	zapLogger *zap.Logger
+)
+
 func main() {
+	var err error
 	ls := &storage.LocalStorage{}
 	corsHandler := cors.New(cors.Options{
 		AllowOriginFunc: func(origin string) bool {
@@ -26,8 +39,30 @@ func main() {
 		AllowCredentials: true, // always allow credentials, otherwise :authorization headers won't work
 		MaxAge:           int(10 * time.Minute / time.Second),
 	})
-
-	grpcServer := grpc.NewServer()
+	zapLogger, err = zap.NewDevelopment()
+	if err != nil {
+		panic(err)
+	}
+	defer zapLogger.Sync()
+	grpc_zap.ReplaceGrpcLoggerV2(zapLogger)
+	grpcServer := grpc.NewServer(
+		grpc_middleware.WithUnaryServerChain(
+			grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
+			grpc_opentracing.UnaryServerInterceptor(),
+			grpc_prometheus.UnaryServerInterceptor,
+			grpc_zap.UnaryServerInterceptor(zapLogger),
+			autograder_grpc.UnaryAuth(),
+			grpc_recovery.UnaryServerInterceptor(),
+		),
+		grpc_middleware.WithStreamServerChain(
+			grpc_ctxtags.StreamServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
+			grpc_opentracing.StreamServerInterceptor(),
+			grpc_prometheus.StreamServerInterceptor,
+			grpc_zap.StreamServerInterceptor(zapLogger),
+			autograder_grpc.StreamAuth(),
+			grpc_recovery.StreamServerInterceptor(),
+		),
+	)
 	autograderService := autograder_grpc.NewAutograderServiceServer(ls)
 	autograder_pb.RegisterAutograderServiceServer(grpcServer, autograderService)
 	wrappedGrpc := grpcweb.WrapServer(grpcServer, grpcweb.WithOriginFunc(func(origin string) bool {
@@ -40,6 +75,7 @@ func main() {
 	router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	router.Get("/metrics", promhttp.Handler().ServeHTTP)
 	router.Options("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP)
 	router.Post("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileUpload)).ServeHTTP)
 	router.Get("/AutograderService/FileDownload/{filename}", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileDownload)).ServeHTTP)

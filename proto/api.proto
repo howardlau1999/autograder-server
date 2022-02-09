@@ -31,12 +31,9 @@ message LoginRequest {
 
 message LoginResponse {
   uint64 user_id = 1;
-  string token = 2;
-  google.protobuf.Timestamp expire_at = 3;
 }
 
 message GetCourseListRequest {
-  uint64 user_id = 1;
 }
 
 message GetCourseListResponse {
@@ -50,8 +47,7 @@ message GetCourseListResponse {
 }
 
 message GetAssignmentsInCourseRequest {
-  uint64 user_id = 1;
-  uint64 course_id = 2;
+  uint64 course_id = 1;
 }
 
 message GetAssignmentsInCourseResponse {
@@ -66,8 +62,7 @@ message GetAssignmentsInCourseResponse {
 }
 
 message GetSubmissionsInAssignmentRequest {
-  uint64 user_id = 1;
-  uint64 assignment_id = 2;
+  uint64 assignment_id = 1;
 }
 
 message GetSubmissionsInAssignmentResponse {
@@ -112,8 +107,7 @@ message ChunkResponse {
 }
 
 message CreateManifestRequest {
-  uint64 user_id = 1;
-  uint64 assignment_id = 2;
+  uint64 assignment_id = 1;
 }
 
 message CreateManifestResponse {
@@ -132,11 +126,10 @@ message InitUploadResponse {
 }
 
 message CreateSubmissionRequest {
-  uint64 user_id = 1;
-  uint64 assignment_id = 2;
-  uint64 manifest_id = 3;
-  repeated uint64 submitters = 4;
-  string leaderboard_name = 5;
+  uint64 assignment_id = 1;
+  uint64 manifest_id = 2;
+  repeated uint64 submitters = 3;
+  string leaderboard_name = 4;
 }
 
 message CreateSubmissionResponse {
@@ -195,6 +188,7 @@ message GetCourseRequest {
 
 message GetCourseResponse {
   Course course = 1;
+  CourseRole role = 2;
 }
 
 message GetFilesInSubmissionRequest {
@@ -292,10 +286,7 @@ service AutograderService {
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
    rpc GetAssignmentsInCourse(GetAssignmentsInCourseRequest) returns (GetAssignmentsInCourseResponse);
    rpc GetSubmissionsInAssignment(GetSubmissionsInAssignmentRequest) returns (GetSubmissionsInAssignmentResponse);
-   rpc SubscribeSubmissions(SubscribeSubmissionsRequest) returns (stream SubscribeSubmissionsResponse);
    rpc SubscribeSubmission(SubscribeSubmissionRequest) returns (stream SubscribeSubmissionResponse);
-   rpc StreamSubmissionLog(StreamSubmissionLogRequest) returns (stream ChunkResponse);
-   rpc GetFile(GetFileRequest) returns (stream ChunkResponse);
    rpc CreateManifest(CreateManifestRequest) returns (CreateManifestResponse);
    rpc CreateSubmission(CreateSubmissionRequest) returns (CreateSubmissionResponse);
    rpc InitUpload(InitUploadRequest) returns (InitUploadResponse);

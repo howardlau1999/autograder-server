@@ -16,11 +16,27 @@ type UserRepository interface {
 	GetUserById(ctx context.Context, id uint64) (*model_pb.User, error)
 	AddCourse(ctx context.Context, member *model_pb.CourseMember) error
 	GetCoursesByUser(ctx context.Context, userId uint64) ([]*model_pb.CourseMember, error)
+	GetCourseMember(ctx context.Context, userId uint64, courseId uint64) *model_pb.CourseMember
 }
 
 type KVUserRepository struct {
 	db  *pebble.DB
 	seq Sequencer
+}
+
+func (ur *KVUserRepository) GetCourseMember(ctx context.Context, userId uint64, courseId uint64) *model_pb.CourseMember {
+	key := ur.getCourseKey(userId, courseId)
+	raw, closer, err := ur.db.Get(key)
+	if err != nil {
+		return nil
+	}
+	defer closer.Close()
+	member := &model_pb.CourseMember{}
+	err = proto.Unmarshal(raw, member)
+	if err != nil {
+		return nil
+	}
+	return member
 }
 
 func (ur *KVUserRepository) GetCoursesByUser(ctx context.Context, userId uint64) ([]*model_pb.CourseMember, error) {

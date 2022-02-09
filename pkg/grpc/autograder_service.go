@@ -13,9 +13,13 @@ import (
 	"github.com/go-chi/chi"
 	"github.com/gogo/protobuf/sortkeys"
 	"github.com/golang-jwt/jwt"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/grpclog"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -42,7 +46,12 @@ type AutograderService struct {
 	ls                   *storage.LocalStorage
 	reportSubs           map[uint64][]chan *model_pb.SubmissionReport
 	subsMu               *sync.Mutex
+	authFuncs            map[string][]MethodAuthFunc
 }
+
+var DownloadJWTSignKey = []byte("download-token-sign-key")
+var UploadJWTSignKey = []byte("upload-token-sign-key")
+var UserJWTSignKey = []byte("user-token-sign-key")
 
 func (a *AutograderService) InitDownload(ctx context.Context, request *autograder_pb.InitDownloadRequest) (*autograder_pb.InitDownloadResponse, error) {
 	filename := request.GetFilename()
@@ -73,7 +82,7 @@ func (a *AutograderService) InitDownload(ctx context.Context, request *autograde
 		fileTypePB = autograder_pb.DownloadFileType_Text
 	}
 	payloadPB := &autograder_pb.DownloadTokenPayload{RealPath: realpath, Filename: fn}
-	ss, err := a.signPayloadToken([]byte("download-token-sign-key"), payloadPB)
+	ss, err := a.signPayloadToken(DownloadJWTSignKey, payloadPB)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "SIGN_JWT")
 	}
@@ -231,13 +240,9 @@ func (a *AutograderService) GetSubmissionReport(ctx context.Context, request *au
 	return resp, err
 }
 
-func (a *AutograderService) GetFile(request *autograder_pb.GetFileRequest, server autograder_pb.AutograderService_GetFileServer) error {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (a *AutograderService) CreateManifest(ctx context.Context, request *autograder_pb.CreateManifestRequest) (*autograder_pb.CreateManifestResponse, error) {
-	id, err := a.manifestRepo.CreateManifest(request.GetUserId(), request.GetAssignmentId())
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	id, err := a.manifestRepo.CreateManifest(user.GetUserId(), request.GetAssignmentId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to create manifest")
 	}
@@ -246,10 +251,11 @@ func (a *AutograderService) CreateManifest(ctx context.Context, request *autogra
 }
 
 func (a *AutograderService) CreateSubmission(ctx context.Context, request *autograder_pb.CreateSubmissionRequest) (*autograder_pb.CreateSubmissionResponse, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	manifestId := request.GetManifestId()
 	assignmentId := request.GetAssignmentId()
 	submitters := request.GetSubmitters()
-	path := fmt.Sprintf("uploads/manifests/%d", manifestId)
+	submissionPath := a.getManifestPath(manifestId)
 	files, err := a.manifestRepo.GetFilesInManifest(manifestId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "MANIFEST_FILES")
@@ -262,16 +268,25 @@ func (a *AutograderService) CreateSubmission(ctx context.Context, request *autog
 		AssignmentId:    assignmentId,
 		SubmittedAt:     timestamppb.Now(),
 		Submitters:      submitters,
-		Path:            path,
+		Path:            submissionPath,
 		Files:           files,
 		LeaderboardName: request.GetLeaderboardName(),
-		UserId:          request.GetUserId(),
+		UserId:          user.GetUserId(),
 	}
 	id, err := a.submissionRepo.CreateSubmission(ctx, submission)
 	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Running}
-	_ = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, id, brief)
-	_ = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, id, assignmentId)
-	_ = a.manifestRepo.DeleteManifest(manifestId)
+	err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, id, brief)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "UPDATE_BRIEF")
+	}
+	err = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, id, assignmentId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "MARK_UNFINISHED")
+	}
+	err = a.manifestRepo.DeleteManifest(manifestId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "DELETE_MANIFEST")
+	}
 	resp := &autograder_pb.CreateSubmissionResponse{SubmissionId: id, Files: files}
 	go a.runSubmission(context.Background(), id, assignmentId)
 	return resp, nil
@@ -288,7 +303,7 @@ func (a *AutograderService) signPayloadToken(key []byte, payload proto.Message) 
 		return "", status.Error(codes.Internal, "PROTOBUF_MARSHAL")
 	}
 	now := time.Now()
-	expireAt := now.Add(1 * time.Minute)
+	expireAt := now.Add(24 * time.Hour)
 	claims := ProtobufClaim{Payload: base64.StdEncoding.EncodeToString(raw), StandardClaims: jwt.StandardClaims{IssuedAt: now.Unix(), ExpiresAt: expireAt.Unix()}}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
 	ss, err := token.SignedString(key)
@@ -308,7 +323,7 @@ func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to add file to manifest")
 	}
-	key := []byte("upload-token-sign-key")
+	key := UploadJWTSignKey
 
 	payload := &autograder_pb.UploadTokenPayload{
 		ManifestId: request.ManifestId,
@@ -320,14 +335,6 @@ func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_
 	}
 	resp := &autograder_pb.InitUploadResponse{Token: ss}
 	return resp, nil
-}
-
-func (a *AutograderService) StreamSubmissionLog(request *autograder_pb.StreamSubmissionLogRequest, server autograder_pb.AutograderService_StreamSubmissionLogServer) error {
-	return nil
-}
-
-func (a *AutograderService) SubscribeSubmissions(request *autograder_pb.SubscribeSubmissionsRequest, server autograder_pb.AutograderService_SubscribeSubmissionsServer) error {
-	return nil
 }
 
 func (a *AutograderService) SubscribeSubmission(request *autograder_pb.SubscribeSubmissionRequest, server autograder_pb.AutograderService_SubscribeSubmissionServer) error {
@@ -356,8 +363,9 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 }
 
 func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, request *autograder_pb.GetSubmissionsInAssignmentRequest) (*autograder_pb.GetSubmissionsInAssignmentResponse, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	var submissions []*autograder_pb.GetSubmissionsInAssignmentResponse_SubmissionInfo
-	subIds, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, request.GetUserId(), request.GetAssignmentId())
+	subIds, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, user.GetUserId(), request.GetAssignmentId())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "NOT_FOUND")
 	}
@@ -429,8 +437,9 @@ func (a *AutograderService) GetAssignmentsInCourse(ctx context.Context, request 
 }
 
 func (a *AutograderService) GetCourseList(ctx context.Context, request *autograder_pb.GetCourseListRequest) (*autograder_pb.GetCourseListResponse, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	var courses []*autograder_pb.GetCourseListResponse_CourseCardInfo
-	courseMembers, err := a.userRepo.GetCoursesByUser(ctx, request.GetUserId())
+	courseMembers, err := a.userRepo.GetCoursesByUser(ctx, user.GetUserId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "GET_COURSES")
 	}
@@ -452,8 +461,10 @@ func (a *AutograderService) GetCourseList(ctx context.Context, request *autograd
 }
 
 func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.LoginRequest) (*autograder_pb.LoginResponse, error) {
+	l := ctxzap.Extract(ctx)
 	username := request.GetUsername()
 	password := request.GetPassword()
+	l.Debug("login", zap.String("username", username))
 	user, id, err := a.userRepo.GetUserByUsername(ctx, username)
 	if user == nil || err != nil {
 		return nil, status.Error(codes.InvalidArgument, "WRONG_PASSWORD")
@@ -465,22 +476,17 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 		UserId:   id,
 		Username: username,
 	}
-	key := []byte("user-token-sign-key")
-	raw, err := proto.Marshal(payload)
+	ss, err := a.signPayloadToken(UserJWTSignKey, payload)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "PROTOBUF_MARSHAL")
+		return nil, err
 	}
-	now := time.Now()
-	expireAt := now.Add(1 * time.Minute)
-	claims := ProtobufClaim{Payload: base64.StdEncoding.EncodeToString(raw), StandardClaims: jwt.StandardClaims{IssuedAt: now.Unix(), ExpiresAt: expireAt.Unix()}}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
-	ss, err := token.SignedString(key)
+	refreshMD := metadata.Pairs("token", ss)
+	err = grpc.SetHeader(ctx, refreshMD)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "JWT_SIGN")
+		return nil, err
 	}
 	response := &autograder_pb.LoginResponse{
 		UserId: id,
-		Token:  ss,
 	}
 	return response, nil
 }
@@ -537,7 +543,7 @@ func (a *AutograderService) runUnfinishedSubmissions() {
 }
 
 func parseTokenPayload(key []byte, tokenString string) ([]byte, error) {
-	uploadToken, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected singning method: %v", token.Header["alg"])
 		}
@@ -549,8 +555,8 @@ func parseTokenPayload(key []byte, tokenString string) ([]byte, error) {
 		return nil, err
 	}
 
-	claims, ok := uploadToken.Claims.(jwt.MapClaims)
-	if !ok || !uploadToken.Valid || claims.Valid() != nil {
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid || claims.Valid() != nil {
 		grpclog.Errorf("not valid")
 		return nil, err
 	}
@@ -571,7 +577,7 @@ func parseTokenPayload(key []byte, tokenString string) ([]byte, error) {
 func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Request) {
 	downloadTokenString := strings.TrimSpace(r.URL.Query().Get("token"))
 	fn := chi.URLParam(r, "filename")
-	payload, err := parseTokenPayload([]byte("download-token-sign-key"), downloadTokenString)
+	payload, err := parseTokenPayload(DownloadJWTSignKey, downloadTokenString)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -589,7 +595,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 	var err error
 	normalizedContentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-type")))
 	uploadTokenString := strings.TrimSpace(r.Header.Get("Upload-token"))
-	payload, err := parseTokenPayload([]byte("upload-token-sign-key"), uploadTokenString)
+	payload, err := parseTokenPayload(UploadJWTSignKey, uploadTokenString)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -615,7 +621,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	uploadFile, header, err := r.FormFile("file")
+	uploadFile, _, err := r.FormFile("file")
 	if err != nil {
 		grpclog.Errorf("Get form file error: %v\n", err)
 		w.WriteHeader(http.StatusBadRequest)
@@ -624,9 +630,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 	fileHeader := make([]byte, 512)
 	_, err = uploadFile.Read(fileHeader)
 	_, err = uploadFile.Seek(0, 0)
-	fileContentType := http.DetectContentType(fileHeader)
-	grpclog.Errorf("filename = %v, mime_header = %v, detected_content_type = %s",
-		payloadPB.Filename, header.Header, fileContentType)
+	_ = http.DetectContentType(fileHeader)
 	destPath := filepath.Join(a.getManifestPath(payloadPB.GetManifestId()), payloadPB.Filename)
 	err = a.ls.Put(
 		r.Context(),
@@ -648,7 +652,7 @@ func NewAutograderServiceServer(ls *storage.LocalStorage) *AutograderService {
 		panic(err)
 	}
 	srr := repository.NewKVSubmissionReportRepository(db)
-	return &AutograderService{
+	a := &AutograderService{
 		manifestRepo:         repository.NewKVManifestRepository(db),
 		userRepo:             repository.NewKVUserRepository(db),
 		submissionRepo:       repository.NewKVSubmissionRepository(db),
@@ -661,4 +665,6 @@ func NewAutograderServiceServer(ls *storage.LocalStorage) *AutograderService {
 		reportSubs:           make(map[uint64][]chan *model_pb.SubmissionReport),
 		subsMu:               &sync.Mutex{},
 	}
+	a.initAuthFuncs()
+	return a
 }
