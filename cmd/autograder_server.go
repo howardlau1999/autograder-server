@@ -3,6 +3,7 @@ package main
 import (
 	autograder_pb "autograder-server/pkg/api/proto"
 	autograder_grpc "autograder-server/pkg/grpc"
+	"autograder-server/pkg/mailer"
 	"autograder-server/pkg/middleware"
 	"autograder-server/pkg/storage"
 	"github.com/go-chi/chi"
@@ -19,7 +20,9 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
+	"math/rand"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -29,7 +32,9 @@ var (
 
 func main() {
 	var err error
+	rand.Seed(time.Now().UnixNano())
 	ls := &storage.LocalStorage{}
+	m := mailer.NewSMTPMailer(os.Getenv("SMTP_ADDR"), os.Getenv("SMTP_USER"), os.Getenv("SMTP_PASS"))
 	corsHandler := cors.New(cors.Options{
 		AllowOriginFunc: func(origin string) bool {
 			return true
@@ -63,7 +68,7 @@ func main() {
 			grpc_recovery.StreamServerInterceptor(),
 		),
 	)
-	autograderService := autograder_grpc.NewAutograderServiceServer(ls)
+	autograderService := autograder_grpc.NewAutograderServiceServer(ls, m)
 	autograder_pb.RegisterAutograderServiceServer(grpcServer, autograderService)
 	wrappedGrpc := grpcweb.WrapServer(grpcServer, grpcweb.WithOriginFunc(func(origin string) bool {
 		return true

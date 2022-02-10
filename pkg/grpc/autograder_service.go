@@ -3,12 +3,14 @@ package grpc
 import (
 	autograder_pb "autograder-server/pkg/api/proto"
 	"autograder-server/pkg/grader"
+	"autograder-server/pkg/mailer"
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/repository"
 	"autograder-server/pkg/storage"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"github.com/avast/retry-go"
 	"github.com/cockroachdb/pebble"
 	"github.com/go-chi/chi"
 	"github.com/gogo/protobuf/sortkeys"
@@ -23,6 +25,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"math/rand"
 	"net/http"
 	"os"
 	"path"
@@ -42,7 +45,9 @@ type AutograderService struct {
 	assignmentRepo       repository.AssignmentRepository
 	courseRepo           repository.CourseRepository
 	leaderboardRepo      repository.LeaderboardRepository
+	verificationCodeRepo repository.VerificationCodeRepository
 	progGrader           grader.ProgrammingGrader
+	mailer               mailer.Mailer
 	ls                   *storage.LocalStorage
 	reportSubs           map[uint64][]chan *model_pb.SubmissionReport
 	subsMu               *sync.Mutex
@@ -52,6 +57,190 @@ type AutograderService struct {
 var DownloadJWTSignKey = []byte("download-token-sign-key")
 var UploadJWTSignKey = []byte("upload-token-sign-key")
 var UserJWTSignKey = []byte("user-token-sign-key")
+var ResetCodeMax = 900000
+
+func (a *AutograderService) sendPasswordResetCode(to string, code string) error {
+	return a.mailer.SendMail(
+		os.Getenv("SMTP_FROM"),
+		[]string{to},
+		"Autograder 密码重置验证码",
+		fmt.Sprintf("您的密码重置验证码为：%s，10 分钟内有效", code),
+	)
+}
+
+func (a *AutograderService) ResetPassword(ctx context.Context, request *autograder_pb.ResetPasswordRequest) (*autograder_pb.ResetPasswordResponse, error) {
+	l := ctxzap.Extract(ctx)
+	email := request.GetEmail()
+	code := request.GetCode()
+	l.Debug("ResetPassword", zap.String("email", email), zap.String("code", code))
+	valid, _ := a.verificationCodeRepo.Validate("password_reset", email, code)
+	if !valid {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_CODE")
+	}
+	user, userId, err := a.userRepo.GetUserByEmail(ctx, email)
+	if err != nil {
+		l.Error("ResetPassword.GetUser", zap.String("email", email), zap.Error(err))
+		return nil, status.Error(codes.Internal, "INTERNAL_ERROR")
+	}
+	user.Password, err = bcrypt.GenerateFromPassword([]byte(request.GetPassword()), bcrypt.DefaultCost)
+	if err != nil {
+		l.Error("ResetPassword.Hash", zap.String("email", email), zap.Error(err))
+		return nil, status.Error(codes.Internal, "INTERNAL_ERROR")
+	}
+	err = a.userRepo.UpdateUser(ctx, userId, user)
+	if err != nil {
+		l.Error("ResetPassword.UpdateUser", zap.String("email", email), zap.Error(err))
+		return nil, status.Error(codes.Internal, "INTERNAL_ERROR")
+	}
+	return &autograder_pb.ResetPasswordResponse{}, nil
+}
+func (a *AutograderService) RequestPasswordReset(ctx context.Context, request *autograder_pb.RequestPasswordResetRequest) (*autograder_pb.RequestPasswordResetResponse, error) {
+	l := ctxzap.Extract(ctx)
+	email := request.GetEmail()
+	userId, _ := a.userRepo.GetUserIdByEmail(ctx, email)
+	if userId == 0 {
+		return nil, nil
+	}
+	l.Debug("RequestPasswordReset", zap.String("email", email))
+	codeInt := rand.Intn(ResetCodeMax)
+	codeInt += 100000
+	code := fmt.Sprintf("%d", codeInt)
+	l.Debug("RequestPasswordReset.CodeGenerated", zap.String("code", code))
+	a.verificationCodeRepo.Issue("password_reset", email, code, time.Now().Add(10*time.Minute))
+	go func() {
+		err := retry.Do(func() error {
+			err := a.sendPasswordResetCode(email, code)
+			if err == nil {
+				l.Debug("RequestPasswordReset.MailSent")
+			}
+			return err
+		}, retry.Attempts(3))
+		if err != nil {
+			l.Error("RequestPasswordReset.SendMail", zap.Error(err))
+		}
+	}()
+	return &autograder_pb.RequestPasswordResetResponse{}, nil
+}
+
+func (a *AutograderService) UpdateCourseMember(ctx context.Context, request *autograder_pb.UpdateCourseMemberRequest) (*autograder_pb.UpdateCourseMemberResponse, error) {
+	courseId := request.GetCourseId()
+	member := request.GetMember()
+	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId), zap.Uint64("userId", member.GetUserId()))
+	l.Debug("UpdateCourseMember")
+	dbMember := a.userRepo.GetCourseMember(ctx, courseId, member.GetUserId())
+	if dbMember == nil {
+		return nil, status.Error(codes.InvalidArgument, "MEMBER_NOT_FOUND")
+	}
+	dbMember.Role = member.GetRole()
+	err := a.userRepo.AddCourse(ctx, dbMember)
+	if err != nil {
+		l.Error("UpdateCourseMember.AddCourse", zap.Error(err))
+		return nil, status.Error(codes.InvalidArgument, "ADD_COURSE")
+	}
+	err = a.courseRepo.AddUser(ctx, dbMember)
+	if err != nil {
+		l.Error("UpdateCourseMember.AddUser", zap.Error(err))
+		return nil, status.Error(codes.InvalidArgument, "ADD_USER")
+	}
+	return &autograder_pb.UpdateCourseMemberResponse{}, nil
+}
+
+func (a *AutograderService) UpdateCourse(ctx context.Context, request *autograder_pb.UpdateCourseRequest) (*autograder_pb.UpdateCourseResponse, error) {
+	courseId := request.GetCourseId()
+	course := request.GetCourse()
+	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId))
+	l.Debug("UpdateCourse")
+	_, err := a.courseRepo.GetCourse(ctx, courseId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_COURSE_ID")
+	}
+	err = a.courseRepo.UpdateCourse(ctx, courseId, course)
+	if err != nil {
+		l.Error("UpdateCourse.UpdateCourse", zap.Error(err))
+		return nil, status.Error(codes.Internal, "UPDATE_COURSE")
+	}
+	return &autograder_pb.UpdateCourseResponse{}, nil
+}
+
+func (a *AutograderService) UpdateAssignment(ctx context.Context, request *autograder_pb.UpdateAssignmentRequest) (*autograder_pb.UpdateAssignmentResponse, error) {
+	assignmentId := request.GetAssignmentId()
+	assignment := request.GetAssignment()
+	l := ctxzap.Extract(ctx).With(zap.Uint64("assignmentId", assignmentId))
+	l.Debug("UpdateAssignment")
+	_, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_COURSE_ID")
+	}
+	err = a.assignmentRepo.UpdateAssignment(ctx, assignmentId, assignment)
+	if err != nil {
+		l.Error("UpdateAssignment.UpdateCourse", zap.Error(err))
+		return nil, status.Error(codes.Internal, "UPDATE_COURSE")
+	}
+	return &autograder_pb.UpdateAssignmentResponse{}, nil
+}
+
+func (a *AutograderService) AddCourseMembers(ctx context.Context, request *autograder_pb.AddCourseMembersRequest) (*autograder_pb.AddCourseMembersResponse, error) {
+	courseId := request.GetCourseId()
+	membersToAdd := request.GetMembers()
+	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId))
+	var added []*model_pb.CourseMember
+	for _, memberToAdd := range membersToAdd {
+		var err error
+		userId, _ := a.userRepo.GetUserIdByEmail(ctx, memberToAdd.GetEmail())
+		if userId == 0 {
+			newUser := &model_pb.User{Email: memberToAdd.GetEmail(), Username: memberToAdd.GetName()}
+			userId, err = a.userRepo.CreateUser(ctx, newUser)
+			if err != nil {
+				l.Error("AddCourseMember.CreateUser", zap.Error(err))
+				continue
+			}
+		}
+		member := a.userRepo.GetCourseMember(ctx, userId, courseId)
+		if member != nil {
+			continue
+		}
+		newMember := &model_pb.CourseMember{
+			UserId:   userId,
+			CourseId: courseId,
+			Role:     memberToAdd.GetRole(),
+		}
+		ml := l.With(zap.Uint64("userId", userId), zap.Stringer("role", memberToAdd.GetRole()))
+		err = a.userRepo.AddCourse(ctx, newMember)
+		if err != nil {
+			ml.Error("AddCourseMembers.AddCourse", zap.Error(err))
+			continue
+		}
+		err = a.courseRepo.AddUser(ctx, newMember)
+		if err != nil {
+			ml.Error("AddCourseMembers.AddUser", zap.Error(err))
+			continue
+		}
+		added = append(added, newMember)
+	}
+	resp := &autograder_pb.AddCourseMembersResponse{Added: added}
+	return resp, nil
+}
+
+func (a *AutograderService) RemoveCourseMembers(ctx context.Context, request *autograder_pb.RemoveCourseMembersRequest) (*autograder_pb.RemoveCourseMembersResponse, error) {
+	membersToRemove := request.GetUserIds()
+	courseId := request.GetCourseId()
+	var removed []uint64
+	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId))
+	for _, memberToRemove := range membersToRemove {
+		ml := l.With(zap.Uint64("userId", memberToRemove))
+		err := a.userRepo.RemoveCourseMember(ctx, courseId, memberToRemove)
+		if err != nil {
+			ml.Error("RemoveCourseMembers.RemoveCourseMember", zap.Error(err))
+		}
+		err = a.courseRepo.RemoveUser(ctx, courseId, memberToRemove)
+		if err != nil {
+			ml.Error("RemoveCourseMembers.RemoveUser", zap.Error(err))
+		}
+		removed = append(removed, memberToRemove)
+	}
+	resp := &autograder_pb.RemoveCourseMembersResponse{Removed: removed}
+	return resp, nil
+}
 
 func (a *AutograderService) GetCourseMembers(ctx context.Context, request *autograder_pb.GetCourseMembersRequest) (*autograder_pb.GetCourseMembersResponse, error) {
 	l := ctxzap.Extract(ctx)
@@ -110,7 +299,7 @@ func (a *AutograderService) InitDownload(ctx context.Context, request *autograde
 		fileTypePB = autograder_pb.DownloadFileType_Text
 	}
 	payloadPB := &autograder_pb.DownloadTokenPayload{RealPath: realpath, Filename: fn}
-	ss, err := a.signPayloadToken(DownloadJWTSignKey, payloadPB)
+	ss, err := a.signPayloadToken(DownloadJWTSignKey, payloadPB, time.Now().Add(1*time.Minute))
 	if err != nil {
 		return nil, status.Error(codes.Internal, "SIGN_JWT")
 	}
@@ -325,13 +514,12 @@ type ProtobufClaim struct {
 	Payload string `json:"payload"`
 }
 
-func (a *AutograderService) signPayloadToken(key []byte, payload proto.Message) (string, error) {
+func (a *AutograderService) signPayloadToken(key []byte, payload proto.Message, expireAt time.Time) (string, error) {
 	raw, err := proto.Marshal(payload)
 	if err != nil {
 		return "", status.Error(codes.Internal, "PROTOBUF_MARSHAL")
 	}
 	now := time.Now()
-	expireAt := now.Add(24 * time.Hour)
 	claims := ProtobufClaim{Payload: base64.StdEncoding.EncodeToString(raw), StandardClaims: jwt.StandardClaims{IssuedAt: now.Unix(), ExpiresAt: expireAt.Unix()}}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
 	ss, err := token.SignedString(key)
@@ -357,7 +545,7 @@ func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_
 		ManifestId: request.ManifestId,
 		Filename:   path.Clean(filename),
 	}
-	ss, err := a.signPayloadToken(key, payload)
+	ss, err := a.signPayloadToken(key, payload, time.Now().Add(1*time.Minute))
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +692,7 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 		UserId:   id,
 		Username: username,
 	}
-	ss, err := a.signPayloadToken(UserJWTSignKey, payload)
+	ss, err := a.signPayloadToken(UserJWTSignKey, payload, time.Now().Add(3*time.Hour))
 	if err != nil {
 		return nil, err
 	}
@@ -674,7 +862,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 	return
 }
 
-func NewAutograderServiceServer(ls *storage.LocalStorage) *AutograderService {
+func NewAutograderServiceServer(ls *storage.LocalStorage, mailer mailer.Mailer) *AutograderService {
 	db, err := pebble.Open("db", &pebble.Options{Merger: repository.NewKVMerger()})
 	if err != nil {
 		panic(err)
@@ -687,8 +875,10 @@ func NewAutograderServiceServer(ls *storage.LocalStorage) *AutograderService {
 		submissionReportRepo: srr,
 		courseRepo:           repository.NewKVCourseRepository(db),
 		assignmentRepo:       repository.NewKVAssignmentRepository(db),
-		progGrader:           grader.NewDockerProgrammingGrader(srr),
 		leaderboardRepo:      repository.NewKVLeaderboardRepository(db),
+		verificationCodeRepo: repository.NewKVVerificationCodeRepository(db),
+		progGrader:           grader.NewDockerProgrammingGrader(srr),
+		mailer:               mailer,
 		ls:                   ls,
 		reportSubs:           make(map[uint64][]chan *model_pb.SubmissionReport),
 		subsMu:               &sync.Mutex{},

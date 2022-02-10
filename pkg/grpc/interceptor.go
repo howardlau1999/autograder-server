@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"time"
 )
 
 const ServerPrefix = "/AutograderService/"
@@ -68,7 +69,7 @@ func (a *AutograderService) RequireLogin(ctx context.Context, req interface{}) (
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "INVALID_TOKEN")
 	}
-	ss, err := a.signPayloadToken(UserJWTSignKey, payloadPB)
+	ss, err := a.signPayloadToken(UserJWTSignKey, payloadPB, time.Now().Add(3*time.Hour))
 	if err == nil {
 		refreshMD := metadata.Pairs("token", ss)
 		_ = grpc.SetHeader(ctx, refreshMD)
@@ -167,7 +168,12 @@ func (a *AutograderService) initAuthFuncs() {
 		AuthFuncs []MethodAuthFunc
 	}{
 		{
-			Methods:   []string{"Login", "SubscribeSubmission"},
+			Methods: []string{
+				"Login",
+				"SubscribeSubmission",
+				"RequestPasswordReset",
+				"ResetPassword",
+			},
 			AuthFuncs: []MethodAuthFunc{a.NoopAuth},
 		},
 		{
@@ -197,6 +203,11 @@ func (a *AutograderService) initAuthFuncs() {
 			Methods: []string{
 				"CreateAssignment",
 				"GetCourseMembers",
+				"RemoveCourseMembers",
+				"AddCourseMembers",
+				"UpdateCourse",
+				"UpdateAssignment",
+				"UpdateCourseMember",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireCourseWrite},
 		},

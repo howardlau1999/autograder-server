@@ -17,11 +17,18 @@ type UserRepository interface {
 	AddCourse(ctx context.Context, member *model_pb.CourseMember) error
 	GetCoursesByUser(ctx context.Context, userId uint64) ([]*model_pb.CourseMember, error)
 	GetCourseMember(ctx context.Context, userId uint64, courseId uint64) *model_pb.CourseMember
+	RemoveCourseMember(ctx context.Context, userId uint64, courseId uint64) error
+	GetUserByEmail(ctx context.Context, email string) (*model_pb.User, uint64, error)
+	GetUserIdByEmail(ctx context.Context, email string) (uint64, error)
 }
 
 type KVUserRepository struct {
 	db  *pebble.DB
 	seq Sequencer
+}
+
+func (ur *KVUserRepository) RemoveCourseMember(ctx context.Context, userId uint64, courseId uint64) error {
+	return ur.db.Delete(ur.getCourseKey(userId, courseId), pebble.Sync)
 }
 
 func (ur *KVUserRepository) GetCourseMember(ctx context.Context, userId uint64, courseId uint64) *model_pb.CourseMember {
@@ -71,12 +78,34 @@ func (ur *KVUserRepository) getUserNameKey(name string) []byte {
 	return []byte(fmt.Sprintf("user:name:%s", name))
 }
 
+func (ur *KVUserRepository) getEmailKey(email string) []byte {
+	return []byte(fmt.Sprintf("user:email:%s", email))
+}
+
 func (ur *KVUserRepository) getCoursePrefix(id uint64) []byte {
 	return append([]byte(fmt.Sprintf("user:courses:%d:", id)))
 }
 
 func (ur *KVUserRepository) getCourseKey(uid uint64, cid uint64) []byte {
 	return append(ur.getCoursePrefix(uid), Uint64ToBytes(cid)...)
+}
+
+func (ur *KVUserRepository) GetUserIdByEmail(ctx context.Context, email string) (uint64, error) {
+	idBytes, closer, err := ur.db.Get(ur.getEmailKey(email))
+	if err != nil {
+		return 0, err
+	}
+	defer closer.Close()
+	return binary.BigEndian.Uint64(idBytes), nil
+}
+
+func (ur *KVUserRepository) GetUserByEmail(ctx context.Context, email string) (*model_pb.User, uint64, error) {
+	userId, err := ur.GetUserIdByEmail(ctx, email)
+	if err != nil {
+		return nil, 0, err
+	}
+	user, err := ur.GetUserById(ctx, userId)
+	return user, userId, err
 }
 
 func (ur *KVUserRepository) CreateUser(ctx context.Context, user *model_pb.User) (uint64, error) {
@@ -95,11 +124,10 @@ func (ur *KVUserRepository) CreateUser(ctx context.Context, user *model_pb.User)
 	if err != nil {
 		return 0, err
 	}
-	idBytes = make([]byte, 8)
-	binary.BigEndian.PutUint64(idBytes, id)
 	batch := ur.db.NewBatch()
 	err = batch.Set(ur.getUserIdKey(id), raw, pebble.Sync)
-	err = batch.Set(ur.getUserNameKey(user.Username), idBytes, pebble.Sync)
+	err = batch.Set(ur.getUserNameKey(user.Username), Uint64ToBytes(id), pebble.Sync)
+	err = batch.Set(ur.getEmailKey(user.Email), Uint64ToBytes(id), pebble.Sync)
 	err = batch.Commit(pebble.Sync)
 	return id, nil
 }

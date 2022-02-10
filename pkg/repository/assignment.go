@@ -11,6 +11,7 @@ import (
 type AssignmentRepository interface {
 	CreateAssignment(ctx context.Context, assignment *model_pb.Assignment) (uint64, error)
 	GetAssignment(ctx context.Context, id uint64) (*model_pb.Assignment, error)
+	UpdateAssignment(ctx context.Context, id uint64, assignment *model_pb.Assignment) error
 }
 
 type KVAssignmentRepository struct {
@@ -18,20 +19,28 @@ type KVAssignmentRepository struct {
 	seq Sequencer
 }
 
+func (ar *KVAssignmentRepository) UpdateAssignment(ctx context.Context, id uint64, assignment *model_pb.Assignment) error {
+	raw, err := proto.Marshal(assignment)
+	if err != nil {
+		return err
+	}
+	err = ar.db.Set(ar.getIdKey(id), raw, pebble.Sync)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (ar *KVAssignmentRepository) getIdKey(id uint64) []byte {
 	return []byte(fmt.Sprintf("assignment:id:%d", id))
 }
 
 func (ar *KVAssignmentRepository) CreateAssignment(ctx context.Context, assignment *model_pb.Assignment) (uint64, error) {
-	raw, err := proto.Marshal(assignment)
-	if err != nil {
-		return 0, err
-	}
 	id, err := ar.seq.GetNextId()
 	if err != nil {
 		return 0, err
 	}
-	err = ar.db.Set(ar.getIdKey(id), raw, pebble.Sync)
+	err = ar.UpdateAssignment(ctx, id, assignment)
 	if err != nil {
 		return 0, err
 	}

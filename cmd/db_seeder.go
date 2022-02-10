@@ -19,7 +19,7 @@ func main() {
 	courseRepo := repository.NewKVCourseRepository(db)
 	assignmentRepo := repository.NewKVAssignmentRepository(db)
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte("root"), bcrypt.DefaultCost)
-	rootUser := &model_pb.User{Username: "root", Password: passwordHash, Email: "bob@example.com"}
+	rootUser := &model_pb.User{Username: "root", Password: passwordHash, Email: "example@test.com", Nickname: "root"}
 	id, err := userRepo.CreateUser(context.Background(), rootUser)
 	if err != nil {
 		panic(err)

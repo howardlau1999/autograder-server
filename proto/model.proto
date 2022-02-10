@@ -10,6 +10,7 @@ message User {
   string email = 3;
   string github_id = 4;
   string nickname = 5;
+  string student_id = 6;
 }
 
 enum SubmissionStatus {
@@ -171,4 +172,10 @@ message ManifestMetadata {
   google.protobuf.Timestamp created_at = 1;
   uint64 user_id = 2;
   uint64 assignment_id = 3;
+}
+
+message VerificationCodeMetadata {
+  string code = 1;
+  google.protobuf.Timestamp issued_at = 2;
+  google.protobuf.Timestamp expired_at = 3;
 }

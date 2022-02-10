@@ -41,6 +41,13 @@ type AutograderServiceClient interface {
 	DeleteFileInManifest(ctx context.Context, in *DeleteFileInManifestRequest, opts ...grpc.CallOption) (*DeleteFileInManifestResponse, error)
 	InitDownload(ctx context.Context, in *InitDownloadRequest, opts ...grpc.CallOption) (*InitDownloadResponse, error)
 	GetCourseMembers(ctx context.Context, in *GetCourseMembersRequest, opts ...grpc.CallOption) (*GetCourseMembersResponse, error)
+	AddCourseMembers(ctx context.Context, in *AddCourseMembersRequest, opts ...grpc.CallOption) (*AddCourseMembersResponse, error)
+	RemoveCourseMembers(ctx context.Context, in *RemoveCourseMembersRequest, opts ...grpc.CallOption) (*RemoveCourseMembersResponse, error)
+	UpdateCourseMember(ctx context.Context, in *UpdateCourseMemberRequest, opts ...grpc.CallOption) (*UpdateCourseMemberResponse, error)
+	UpdateCourse(ctx context.Context, in *UpdateCourseRequest, opts ...grpc.CallOption) (*UpdateCourseResponse, error)
+	UpdateAssignment(ctx context.Context, in *UpdateAssignmentRequest, opts ...grpc.CallOption) (*UpdateAssignmentResponse, error)
+	RequestPasswordReset(ctx context.Context, in *RequestPasswordResetRequest, opts ...grpc.CallOption) (*RequestPasswordResetResponse, error)
+	ResetPassword(ctx context.Context, in *ResetPasswordRequest, opts ...grpc.CallOption) (*ResetPasswordResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -245,6 +252,69 @@ func (c *autograderServiceClient) GetCourseMembers(ctx context.Context, in *GetC
 	return out, nil
 }
 
+func (c *autograderServiceClient) AddCourseMembers(ctx context.Context, in *AddCourseMembersRequest, opts ...grpc.CallOption) (*AddCourseMembersResponse, error) {
+	out := new(AddCourseMembersResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/AddCourseMembers", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) RemoveCourseMembers(ctx context.Context, in *RemoveCourseMembersRequest, opts ...grpc.CallOption) (*RemoveCourseMembersResponse, error) {
+	out := new(RemoveCourseMembersResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/RemoveCourseMembers", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) UpdateCourseMember(ctx context.Context, in *UpdateCourseMemberRequest, opts ...grpc.CallOption) (*UpdateCourseMemberResponse, error) {
+	out := new(UpdateCourseMemberResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/UpdateCourseMember", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) UpdateCourse(ctx context.Context, in *UpdateCourseRequest, opts ...grpc.CallOption) (*UpdateCourseResponse, error) {
+	out := new(UpdateCourseResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/UpdateCourse", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) UpdateAssignment(ctx context.Context, in *UpdateAssignmentRequest, opts ...grpc.CallOption) (*UpdateAssignmentResponse, error) {
+	out := new(UpdateAssignmentResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/UpdateAssignment", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) RequestPasswordReset(ctx context.Context, in *RequestPasswordResetRequest, opts ...grpc.CallOption) (*RequestPasswordResetResponse, error) {
+	out := new(RequestPasswordResetResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/RequestPasswordReset", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) ResetPassword(ctx context.Context, in *ResetPasswordRequest, opts ...grpc.CallOption) (*ResetPasswordResponse, error) {
+	out := new(ResetPasswordResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/ResetPassword", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -268,6 +338,13 @@ type AutograderServiceServer interface {
 	DeleteFileInManifest(context.Context, *DeleteFileInManifestRequest) (*DeleteFileInManifestResponse, error)
 	InitDownload(context.Context, *InitDownloadRequest) (*InitDownloadResponse, error)
 	GetCourseMembers(context.Context, *GetCourseMembersRequest) (*GetCourseMembersResponse, error)
+	AddCourseMembers(context.Context, *AddCourseMembersRequest) (*AddCourseMembersResponse, error)
+	RemoveCourseMembers(context.Context, *RemoveCourseMembersRequest) (*RemoveCourseMembersResponse, error)
+	UpdateCourseMember(context.Context, *UpdateCourseMemberRequest) (*UpdateCourseMemberResponse, error)
+	UpdateCourse(context.Context, *UpdateCourseRequest) (*UpdateCourseResponse, error)
+	UpdateAssignment(context.Context, *UpdateAssignmentRequest) (*UpdateAssignmentResponse, error)
+	RequestPasswordReset(context.Context, *RequestPasswordResetRequest) (*RequestPasswordResetResponse, error)
+	ResetPassword(context.Context, *ResetPasswordRequest) (*ResetPasswordResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -331,6 +408,27 @@ func (UnimplementedAutograderServiceServer) InitDownload(context.Context, *InitD
 }
 func (UnimplementedAutograderServiceServer) GetCourseMembers(context.Context, *GetCourseMembersRequest) (*GetCourseMembersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCourseMembers not implemented")
+}
+func (UnimplementedAutograderServiceServer) AddCourseMembers(context.Context, *AddCourseMembersRequest) (*AddCourseMembersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddCourseMembers not implemented")
+}
+func (UnimplementedAutograderServiceServer) RemoveCourseMembers(context.Context, *RemoveCourseMembersRequest) (*RemoveCourseMembersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveCourseMembers not implemented")
+}
+func (UnimplementedAutograderServiceServer) UpdateCourseMember(context.Context, *UpdateCourseMemberRequest) (*UpdateCourseMemberResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateCourseMember not implemented")
+}
+func (UnimplementedAutograderServiceServer) UpdateCourse(context.Context, *UpdateCourseRequest) (*UpdateCourseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateCourse not implemented")
+}
+func (UnimplementedAutograderServiceServer) UpdateAssignment(context.Context, *UpdateAssignmentRequest) (*UpdateAssignmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateAssignment not implemented")
+}
+func (UnimplementedAutograderServiceServer) RequestPasswordReset(context.Context, *RequestPasswordResetRequest) (*RequestPasswordResetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RequestPasswordReset not implemented")
+}
+func (UnimplementedAutograderServiceServer) ResetPassword(context.Context, *ResetPasswordRequest) (*ResetPasswordResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResetPassword not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -690,6 +788,132 @@ func _AutograderService_GetCourseMembers_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_AddCourseMembers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddCourseMembersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).AddCourseMembers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/AddCourseMembers",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).AddCourseMembers(ctx, req.(*AddCourseMembersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_RemoveCourseMembers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveCourseMembersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).RemoveCourseMembers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/RemoveCourseMembers",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).RemoveCourseMembers(ctx, req.(*RemoveCourseMembersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_UpdateCourseMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateCourseMemberRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).UpdateCourseMember(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/UpdateCourseMember",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).UpdateCourseMember(ctx, req.(*UpdateCourseMemberRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_UpdateCourse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateCourseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).UpdateCourse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/UpdateCourse",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).UpdateCourse(ctx, req.(*UpdateCourseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_UpdateAssignment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateAssignmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).UpdateAssignment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/UpdateAssignment",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).UpdateAssignment(ctx, req.(*UpdateAssignmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_RequestPasswordReset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestPasswordResetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).RequestPasswordReset(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/RequestPasswordReset",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).RequestPasswordReset(ctx, req.(*RequestPasswordResetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_ResetPassword_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResetPasswordRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).ResetPassword(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/ResetPassword",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).ResetPassword(ctx, req.(*ResetPasswordRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -768,6 +992,34 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCourseMembers",
 			Handler:    _AutograderService_GetCourseMembers_Handler,
+		},
+		{
+			MethodName: "AddCourseMembers",
+			Handler:    _AutograderService_AddCourseMembers_Handler,
+		},
+		{
+			MethodName: "RemoveCourseMembers",
+			Handler:    _AutograderService_RemoveCourseMembers_Handler,
+		},
+		{
+			MethodName: "UpdateCourseMember",
+			Handler:    _AutograderService_UpdateCourseMember_Handler,
+		},
+		{
+			MethodName: "UpdateCourse",
+			Handler:    _AutograderService_UpdateCourse_Handler,
+		},
+		{
+			MethodName: "UpdateAssignment",
+			Handler:    _AutograderService_UpdateAssignment_Handler,
+		},
+		{
+			MethodName: "RequestPasswordReset",
+			Handler:    _AutograderService_RequestPasswordReset_Handler,
+		},
+		{
+			MethodName: "ResetPassword",
+			Handler:    _AutograderService_ResetPassword_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

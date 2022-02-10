@@ -13,11 +13,18 @@ type SubmissionRepository interface {
 	CreateSubmission(ctx context.Context, submission *model_pb.Submission) (uint64, error)
 	GetSubmission(ctx context.Context, id uint64) (*model_pb.Submission, error)
 	GetSubmissionsByUserAndAssignment(ctx context.Context, userId, assignmentId uint64) ([]uint64, error)
+	DeleteSubmissionsByUserAndAssignment(ctx context.Context, userId, assignmentId uint64) error
 }
 
 type KVSubmissionRepository struct {
 	db  *pebble.DB
 	seq Sequencer
+}
+
+func (sr *KVSubmissionRepository) DeleteSubmissionsByUserAndAssignment(ctx context.Context, userId, assignmentId uint64) error {
+	prefix := sr.getUserAssignmentPrefix(userId, assignmentId)
+	upper := KeyUpperBound(prefix)
+	return sr.db.DeleteRange(prefix, upper, pebble.Sync)
 }
 
 func (sr *KVSubmissionRepository) GetSubmissionsByUserAndAssignment(ctx context.Context, userId, assignmentId uint64) ([]uint64, error) {

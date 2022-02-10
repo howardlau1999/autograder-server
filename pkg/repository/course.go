@@ -12,14 +12,20 @@ type CourseRepository interface {
 	CreateCourse(ctx context.Context, course *model_pb.Course) (uint64, error)
 	GetCourse(ctx context.Context, id uint64) (*model_pb.Course, error)
 	AddUser(ctx context.Context, member *model_pb.CourseMember) error
+	RemoveUser(ctx context.Context, courseId uint64, userId uint64) error
 	AddAssignment(ctx context.Context, courseId uint64, assignmentId uint64) error
 	GetUsersByCourse(ctx context.Context, courseId uint64) ([]*model_pb.CourseMember, error)
 	GetAssignmentsByCourse(ctx context.Context, courseId uint64) ([]uint64, error)
+	UpdateCourse(ctx context.Context, courseId uint64, course *model_pb.Course) error
 }
 
 type KVCourseRepository struct {
 	db  *pebble.DB
 	seq Sequencer
+}
+
+func (cr *KVCourseRepository) RemoveUser(ctx context.Context, courseId uint64, userId uint64) error {
+	return cr.db.Delete(cr.getUserKey(courseId, userId), pebble.Sync)
 }
 
 func (cr *KVCourseRepository) AddAssignment(ctx context.Context, courseId uint64, assignmentId uint64) error {
@@ -71,19 +77,25 @@ func (cr *KVCourseRepository) getUserKey(courseId uint64, userId uint64) []byte 
 func (cr *KVCourseRepository) getAssignmentPrefix(courseId uint64) []byte {
 	return []byte(fmt.Sprintf("course:assignments:%d:", courseId))
 }
+
 func (cr *KVCourseRepository) getAssignmentKey(courseId uint64, assignmentId uint64) []byte {
 	return append(cr.getAssignmentPrefix(courseId), Uint64ToBytes(assignmentId)...)
 }
-func (cr *KVCourseRepository) CreateCourse(ctx context.Context, course *model_pb.Course) (uint64, error) {
+
+func (cr *KVCourseRepository) UpdateCourse(ctx context.Context, courseId uint64, course *model_pb.Course) error {
 	raw, err := proto.Marshal(course)
 	if err != nil {
-		return 0, err
+		return err
 	}
+	return cr.db.Set(cr.getIdKey(courseId), raw, pebble.Sync)
+}
+
+func (cr *KVCourseRepository) CreateCourse(ctx context.Context, course *model_pb.Course) (uint64, error) {
 	id, err := cr.seq.GetNextId()
 	if err != nil {
 		return 0, err
 	}
-	err = cr.db.Set(cr.getIdKey(id), raw, pebble.Sync)
+	err = cr.UpdateCourse(ctx, id, course)
 	if err != nil {
 		return 0, err
 	}

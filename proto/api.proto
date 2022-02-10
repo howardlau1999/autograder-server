@@ -296,6 +296,74 @@ message GetCourseMembersResponse {
   repeated MemberInfo members = 1;
 }
 
+message RemoveCourseMembersRequest {
+  uint64 course_id = 1;
+  repeated uint64 user_ids = 2;
+}
+
+message RemoveCourseMembersResponse {
+  repeated uint64 removed = 1;
+}
+
+message AddCourseMembersRequest {
+  uint64 course_id = 1;
+  message MemberToAdd {
+    string email = 1;
+    string name = 2;
+    CourseRole role = 3;
+  }
+  repeated MemberToAdd members = 2;
+}
+
+message AddCourseMembersResponse {
+  repeated CourseMember added = 1;
+}
+
+message UpdateCourseMemberRequest {
+  uint64 course_id = 1;
+  CourseMember member = 2;
+}
+
+message UpdateCourseMemberResponse {
+
+}
+
+message UpdateCourseRequest {
+  uint64 course_id = 1;
+  Course course = 2;
+}
+
+message UpdateCourseResponse {
+
+}
+
+message UpdateAssignmentRequest {
+  uint64 assignment_id = 1;
+  Assignment assignment = 2;
+}
+
+message UpdateAssignmentResponse {
+
+}
+
+message RequestPasswordResetRequest {
+  string email = 1;
+}
+
+message RequestPasswordResetResponse {
+
+}
+
+message ResetPasswordRequest {
+  string email = 1;
+  string code = 2;
+  string password = 3;
+}
+
+message ResetPasswordResponse {
+
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -316,4 +384,11 @@ service AutograderService {
    rpc DeleteFileInManifest(DeleteFileInManifestRequest) returns (DeleteFileInManifestResponse);
    rpc InitDownload(InitDownloadRequest) returns (InitDownloadResponse);
    rpc GetCourseMembers(GetCourseMembersRequest) returns (GetCourseMembersResponse);
+   rpc AddCourseMembers(AddCourseMembersRequest) returns (AddCourseMembersResponse);
+   rpc RemoveCourseMembers(RemoveCourseMembersRequest) returns (RemoveCourseMembersResponse);
+   rpc UpdateCourseMember(UpdateCourseMemberRequest) returns (UpdateCourseMemberResponse);
+   rpc UpdateCourse(UpdateCourseRequest) returns (UpdateCourseResponse);
+   rpc UpdateAssignment(UpdateAssignmentRequest) returns (UpdateAssignmentResponse);
+   rpc RequestPasswordReset(RequestPasswordResetRequest) returns (RequestPasswordResetResponse);
+   rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
 }
