@@ -44,7 +44,7 @@ func main() {
 		LateDueDate:    timestamppb.Now(),
 		Description:    "这是第一个作业。",
 		ProgrammingConfig: &model_pb.ProgrammingAssignmentConfig{
-			Image:     "howardlau1999/hello-world",
+			Image:     "howardlau1999/ag-test:asgn1",
 			FullScore: 100,
 		},
 		Published: true,

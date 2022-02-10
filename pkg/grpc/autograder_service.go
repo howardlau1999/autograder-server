@@ -187,8 +187,17 @@ func (a *AutograderService) AddCourseMembers(ctx context.Context, request *autog
 	for _, memberToAdd := range membersToAdd {
 		var err error
 		userId, _ := a.userRepo.GetUserIdByEmail(ctx, memberToAdd.GetEmail())
+		l.Debug("AddCourseMember.GetUserIdByEmail", zap.Uint64("userId", userId), zap.String("email", memberToAdd.GetEmail()))
 		if userId == 0 {
-			newUser := &model_pb.User{Email: memberToAdd.GetEmail(), Username: memberToAdd.GetName()}
+			newUsername := memberToAdd.GetName()
+			if len(newUsername) < 3 {
+				continue
+			}
+			existId, err := a.userRepo.GetUserIdByUsername(ctx, newUsername)
+			if existId != 0 {
+				continue
+			}
+			newUser := &model_pb.User{Email: memberToAdd.GetEmail(), Username: newUsername, Nickname: newUsername}
 			userId, err = a.userRepo.CreateUser(ctx, newUser)
 			if err != nil {
 				l.Error("AddCourseMember.CreateUser", zap.Error(err))
@@ -222,13 +231,17 @@ func (a *AutograderService) AddCourseMembers(ctx context.Context, request *autog
 }
 
 func (a *AutograderService) RemoveCourseMembers(ctx context.Context, request *autograder_pb.RemoveCourseMembersRequest) (*autograder_pb.RemoveCourseMembersResponse, error) {
+	currentUserId := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload).GetUserId()
 	membersToRemove := request.GetUserIds()
 	courseId := request.GetCourseId()
 	var removed []uint64
 	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId))
 	for _, memberToRemove := range membersToRemove {
+		if currentUserId == memberToRemove {
+			continue
+		}
 		ml := l.With(zap.Uint64("userId", memberToRemove))
-		err := a.userRepo.RemoveCourseMember(ctx, courseId, memberToRemove)
+		err := a.userRepo.RemoveCourseMember(ctx, memberToRemove, courseId)
 		if err != nil {
 			ml.Error("RemoveCourseMembers.RemoveCourseMember", zap.Error(err))
 		}
@@ -681,7 +694,14 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 	username := request.GetUsername()
 	password := request.GetPassword()
 	l.Debug("login", zap.String("username", username))
-	user, id, err := a.userRepo.GetUserByUsername(ctx, username)
+	var user *model_pb.User
+	var id uint64
+	var err error
+	if strings.Contains(username, "@") {
+		user, id, err = a.userRepo.GetUserByEmail(ctx, username)
+	} else {
+		user, id, err = a.userRepo.GetUserByUsername(ctx, username)
+	}
 	if user == nil || err != nil {
 		return nil, status.Error(codes.InvalidArgument, "WRONG_PASSWORD")
 	}

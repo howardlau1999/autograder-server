@@ -12,6 +12,7 @@ import (
 type UserRepository interface {
 	CreateUser(ctx context.Context, user *model_pb.User) (uint64, error)
 	UpdateUser(ctx context.Context, id uint64, user *model_pb.User) error
+	GetUserIdByUsername(ctx context.Context, username string) (uint64, error)
 	GetUserByUsername(ctx context.Context, username string) (*model_pb.User, uint64, error)
 	GetUserById(ctx context.Context, id uint64) (*model_pb.User, error)
 	AddCourse(ctx context.Context, member *model_pb.CourseMember) error
@@ -25,6 +26,16 @@ type UserRepository interface {
 type KVUserRepository struct {
 	db  *pebble.DB
 	seq Sequencer
+}
+
+func (ur *KVUserRepository) GetUserIdByUsername(ctx context.Context, username string) (uint64, error) {
+	idBytes, closer, err := ur.db.Get(ur.getUserNameKey(username))
+	if err != nil {
+		return 0, err
+	}
+	closer.Close()
+	id := binary.BigEndian.Uint64(idBytes)
+	return id, nil
 }
 
 func (ur *KVUserRepository) RemoveCourseMember(ctx context.Context, userId uint64, courseId uint64) error {
@@ -70,8 +81,8 @@ func (ur *KVUserRepository) AddCourse(ctx context.Context, member *model_pb.Cour
 	return ur.db.Set(ur.getCourseKey(member.GetUserId(), member.GetCourseId()), raw, pebble.Sync)
 }
 
-func (ur *KVUserRepository) getUserIdKey(id uint64) []byte {
-	return []byte(fmt.Sprintf("user:id:%d", id))
+func (ur *KVUserRepository) getUserIdKey(userId uint64) []byte {
+	return []byte(fmt.Sprintf("user:id:%d", userId))
 }
 
 func (ur *KVUserRepository) getUserNameKey(name string) []byte {
@@ -82,12 +93,12 @@ func (ur *KVUserRepository) getEmailKey(email string) []byte {
 	return []byte(fmt.Sprintf("user:email:%s", email))
 }
 
-func (ur *KVUserRepository) getCoursePrefix(id uint64) []byte {
-	return append([]byte(fmt.Sprintf("user:courses:%d:", id)))
+func (ur *KVUserRepository) getCoursePrefix(courseId uint64) []byte {
+	return append([]byte(fmt.Sprintf("user:courses:%d:", courseId)))
 }
 
-func (ur *KVUserRepository) getCourseKey(uid uint64, cid uint64) []byte {
-	return append(ur.getCoursePrefix(uid), Uint64ToBytes(cid)...)
+func (ur *KVUserRepository) getCourseKey(userId uint64, courseId uint64) []byte {
+	return append(ur.getCoursePrefix(userId), Uint64ToBytes(courseId)...)
 }
 
 func (ur *KVUserRepository) GetUserIdByEmail(ctx context.Context, email string) (uint64, error) {
@@ -146,12 +157,10 @@ func (ur *KVUserRepository) UpdateUser(ctx context.Context, id uint64, user *mod
 }
 
 func (ur *KVUserRepository) GetUserByUsername(ctx context.Context, username string) (*model_pb.User, uint64, error) {
-	idBytes, closer, err := ur.db.Get(ur.getUserNameKey(username))
+	id, err := ur.GetUserIdByUsername(ctx, username)
 	if err != nil {
 		return nil, 0, err
 	}
-	closer.Close()
-	id := binary.BigEndian.Uint64(idBytes)
 	user, err := ur.GetUserById(ctx, id)
 	if err != nil {
 		return nil, 0, err
