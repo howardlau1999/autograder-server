@@ -7,6 +7,8 @@ import (
 	"fmt"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/auth"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -41,6 +43,10 @@ type IGetSubmissionId interface {
 	GetSubmissionId() uint64
 }
 
+type IGetCaptcha interface {
+	GetCaptcha() string
+}
+
 type ServiceAuthFunc interface {
 	AuthFunc(ctx context.Context, req interface{}, fullMethod string) (context.Context, error)
 }
@@ -52,6 +58,25 @@ func getFullName(method string) string {
 }
 
 func (a *AutograderService) NoopAuth(ctx context.Context, req interface{}) (context.Context, error) {
+	return ctx, nil
+}
+
+func (a *AutograderService) RequireCaptcha(ctx context.Context, req interface{}) (context.Context, error) {
+	l := ctxzap.Extract(ctx)
+	r, ok := req.(IGetCaptcha)
+	if !ok {
+		l.Error("RequireCaptcha.NoGetCaptcha")
+		return nil, status.Error(codes.InvalidArgument, "NO_CAPTCHA")
+	}
+	captcha := r.GetCaptcha()
+	if captcha == "" {
+		return nil, status.Error(codes.InvalidArgument, "NO_CAPTCHA")
+	}
+	verifyResp := a.captchaVerifier.VerifyToken(captcha)
+	if !verifyResp.Success {
+		l.Debug("hCaptcha.Response", zap.Strings("error-codes", verifyResp.ErrorCodes))
+		return nil, status.Error(codes.InvalidArgument, "INVALID_CAPTCHA")
+	}
 	return ctx, nil
 }
 
@@ -170,11 +195,18 @@ func (a *AutograderService) initAuthFuncs() {
 		{
 			Methods: []string{
 				"Login",
+				"SignUp",
 				"SubscribeSubmission",
-				"RequestPasswordReset",
 				"ResetPassword",
 			},
 			AuthFuncs: []MethodAuthFunc{a.NoopAuth},
+		},
+		{
+			Methods: []string{
+				"RequestPasswordReset",
+				"RequestSignUpToken",
+			},
+			AuthFuncs: []MethodAuthFunc{a.RequireCaptcha},
 		},
 		{
 			Methods: []string{

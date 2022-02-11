@@ -42,6 +42,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/kataras/hcaptcha v0.0.0-20200711031247-2927d4faf32f // indirect
 	github.com/klauspost/compress v1.14.1 // indirect
 	github.com/kr/pretty v0.2.1 // indirect
 	github.com/kr/text v0.2.0 // indirect

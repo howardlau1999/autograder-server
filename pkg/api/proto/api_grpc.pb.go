@@ -48,6 +48,8 @@ type AutograderServiceClient interface {
 	UpdateAssignment(ctx context.Context, in *UpdateAssignmentRequest, opts ...grpc.CallOption) (*UpdateAssignmentResponse, error)
 	RequestPasswordReset(ctx context.Context, in *RequestPasswordResetRequest, opts ...grpc.CallOption) (*RequestPasswordResetResponse, error)
 	ResetPassword(ctx context.Context, in *ResetPasswordRequest, opts ...grpc.CallOption) (*ResetPasswordResponse, error)
+	RequestSignUpToken(ctx context.Context, in *RequestSignUpTokenRequest, opts ...grpc.CallOption) (*RequestSignUpTokenResponse, error)
+	SignUp(ctx context.Context, in *SignUpRequest, opts ...grpc.CallOption) (*SignUpResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -315,6 +317,24 @@ func (c *autograderServiceClient) ResetPassword(ctx context.Context, in *ResetPa
 	return out, nil
 }
 
+func (c *autograderServiceClient) RequestSignUpToken(ctx context.Context, in *RequestSignUpTokenRequest, opts ...grpc.CallOption) (*RequestSignUpTokenResponse, error) {
+	out := new(RequestSignUpTokenResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/RequestSignUpToken", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) SignUp(ctx context.Context, in *SignUpRequest, opts ...grpc.CallOption) (*SignUpResponse, error) {
+	out := new(SignUpResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/SignUp", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -345,6 +365,8 @@ type AutograderServiceServer interface {
 	UpdateAssignment(context.Context, *UpdateAssignmentRequest) (*UpdateAssignmentResponse, error)
 	RequestPasswordReset(context.Context, *RequestPasswordResetRequest) (*RequestPasswordResetResponse, error)
 	ResetPassword(context.Context, *ResetPasswordRequest) (*ResetPasswordResponse, error)
+	RequestSignUpToken(context.Context, *RequestSignUpTokenRequest) (*RequestSignUpTokenResponse, error)
+	SignUp(context.Context, *SignUpRequest) (*SignUpResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -429,6 +451,12 @@ func (UnimplementedAutograderServiceServer) RequestPasswordReset(context.Context
 }
 func (UnimplementedAutograderServiceServer) ResetPassword(context.Context, *ResetPasswordRequest) (*ResetPasswordResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResetPassword not implemented")
+}
+func (UnimplementedAutograderServiceServer) RequestSignUpToken(context.Context, *RequestSignUpTokenRequest) (*RequestSignUpTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RequestSignUpToken not implemented")
+}
+func (UnimplementedAutograderServiceServer) SignUp(context.Context, *SignUpRequest) (*SignUpResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SignUp not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -914,6 +942,42 @@ func _AutograderService_ResetPassword_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_RequestSignUpToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestSignUpTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).RequestSignUpToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/RequestSignUpToken",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).RequestSignUpToken(ctx, req.(*RequestSignUpTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_SignUp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignUpRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).SignUp(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/SignUp",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).SignUp(ctx, req.(*SignUpRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1020,6 +1084,14 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResetPassword",
 			Handler:    _AutograderService_ResetPassword_Handler,
+		},
+		{
+			MethodName: "RequestSignUpToken",
+			Handler:    _AutograderService_RequestSignUpToken_Handler,
+		},
+		{
+			MethodName: "SignUp",
+			Handler:    _AutograderService_SignUp_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -15,6 +15,7 @@ import (
 	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/improbable-eng/grpc-web/go/grpcweb"
+	"github.com/kataras/hcaptcha"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 	"go.uber.org/zap"
@@ -35,6 +36,7 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 	ls := &storage.LocalStorage{}
 	m := mailer.NewSMTPMailer(os.Getenv("SMTP_ADDR"), os.Getenv("SMTP_USER"), os.Getenv("SMTP_PASS"))
+	hcaptchaClient := hcaptcha.New(os.Getenv("HCAPTCHA_SECRET"))
 	corsHandler := cors.New(cors.Options{
 		AllowOriginFunc: func(origin string) bool {
 			return true
@@ -68,7 +70,7 @@ func main() {
 			grpc_recovery.StreamServerInterceptor(),
 		),
 	)
-	autograderService := autograder_grpc.NewAutograderServiceServer(ls, m)
+	autograderService := autograder_grpc.NewAutograderServiceServer(ls, m, hcaptchaClient)
 	autograder_pb.RegisterAutograderServiceServer(grpcServer, autograderService)
 	wrappedGrpc := grpcweb.WrapServer(grpcServer, grpcweb.WithOriginFunc(func(origin string) bool {
 		return true

@@ -2,6 +2,7 @@ package repository
 
 import (
 	model_pb "autograder-server/pkg/model/proto"
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"github.com/cockroachdb/pebble"
@@ -11,15 +12,15 @@ import (
 )
 
 type VerificationCodeRepository interface {
-	Issue(typ string, key string, code string, expireAt time.Time) error
-	Validate(typ string, key string, code string) (bool, error)
+	Issue(ctx context.Context, typ string, key string, code string, expireAt time.Time) error
+	Validate(ctx context.Context, typ string, key string, code string) (bool, error)
 }
 
 type KVVerificationCodeRepository struct {
 	db *pebble.DB
 }
 
-func (vr *KVVerificationCodeRepository) Issue(typ string, key string, code string, expireAt time.Time) error {
+func (vr *KVVerificationCodeRepository) Issue(ctx context.Context, typ string, key string, code string, expireAt time.Time) error {
 	metadata := &model_pb.VerificationCodeMetadata{Code: code, IssuedAt: timestamppb.Now(), ExpiredAt: timestamppb.New(expireAt)}
 	raw, err := proto.Marshal(metadata)
 	if err != nil {
@@ -28,7 +29,7 @@ func (vr *KVVerificationCodeRepository) Issue(typ string, key string, code strin
 	return vr.db.Set(vr.getKey(typ, key), raw, pebble.Sync)
 }
 
-func (vr *KVVerificationCodeRepository) Validate(typ string, key string, code string) (bool, error) {
+func (vr *KVVerificationCodeRepository) Validate(ctx context.Context, typ string, key string, code string) (bool, error) {
 	k := vr.getKey(typ, key)
 	raw, closer, err := vr.db.Get(k)
 	if err != nil {

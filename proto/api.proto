@@ -119,6 +119,7 @@ message InitUploadRequest {
   uint64 manifest_id = 1;
   string filename = 2;
   string token = 3;
+  uint64 filesize = 4;
 }
 
 message InitUploadResponse {
@@ -143,6 +144,7 @@ message UploadTokenPayload {
   uint64 assignment_id = 2;
   uint64 manifest_id = 3;
   string filename = 4;
+  uint64 filesize = 5;
 }
 
 message UserTokenPayload {
@@ -348,6 +350,7 @@ message UpdateAssignmentResponse {
 
 message RequestPasswordResetRequest {
   string email = 1;
+  string captcha = 2;
 }
 
 message RequestPasswordResetResponse {
@@ -362,6 +365,27 @@ message ResetPasswordRequest {
 
 message ResetPasswordResponse {
 
+}
+
+message RequestSignUpTokenRequest {
+  string email = 1;
+  string username = 2;
+  string captcha = 3;
+}
+
+message RequestSignUpTokenResponse {
+
+}
+
+message SignUpRequest {
+  string email = 1;
+  string username = 2;
+  string code = 3;
+  string password = 4;
+}
+
+message SignUpResponse {
+  uint64 user_id = 1;
 }
 
 service AutograderService {
@@ -391,4 +415,6 @@ service AutograderService {
    rpc UpdateAssignment(UpdateAssignmentRequest) returns (UpdateAssignmentResponse);
    rpc RequestPasswordReset(RequestPasswordResetRequest) returns (RequestPasswordResetResponse);
    rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
+   rpc RequestSignUpToken(RequestSignUpTokenRequest) returns (RequestSignUpTokenResponse);
+   rpc SignUp(SignUpRequest) returns (SignUpResponse);
 }

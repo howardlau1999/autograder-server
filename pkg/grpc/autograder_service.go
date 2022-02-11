@@ -16,6 +16,7 @@ import (
 	"github.com/gogo/protobuf/sortkeys"
 	"github.com/golang-jwt/jwt"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"github.com/kataras/hcaptcha"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
@@ -27,9 +28,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"math/rand"
 	"net/http"
+	"net/mail"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -49,6 +52,7 @@ type AutograderService struct {
 	progGrader           grader.ProgrammingGrader
 	mailer               mailer.Mailer
 	ls                   *storage.LocalStorage
+	captchaVerifier      *hcaptcha.Client
 	reportSubs           map[uint64][]chan *model_pb.SubmissionReport
 	subsMu               *sync.Mutex
 	authFuncs            map[string][]MethodAuthFunc
@@ -59,13 +63,31 @@ var UploadJWTSignKey = []byte("upload-token-sign-key")
 var UserJWTSignKey = []byte("user-token-sign-key")
 var ResetCodeMax = 900000
 
-func (a *AutograderService) sendPasswordResetCode(to string, code string) error {
+const PasswordResetSubject = "Autograder 密码重置验证码"
+const PasswordResetTemplate = "您的密码重置验证码为：%s，10 分钟内有效。\nAutograder"
+const PasswordResetRepoType = "password_reset"
+const SignUpSubject = "Autograder 注册验证码"
+const SignUpTemplate = "您的注册验证码为：%s，10 分钟内有效。\nAutograder"
+const SignUpRepoType = "sign_up"
+
+var UsernameRegExp = regexp.MustCompile("^[a-zA-Z][a-zA-Z0-9_]{3,}$")
+var EmailCodeValidDuration = 10 * time.Minute
+
+func (a *AutograderService) sendEmailCode(to string, subject string, code string, template string) error {
 	return a.mailer.SendMail(
 		os.Getenv("SMTP_FROM"),
 		[]string{to},
-		"Autograder 密码重置验证码",
-		fmt.Sprintf("您的密码重置验证码为：%s，10 分钟内有效", code),
+		subject,
+		fmt.Sprintf(template, code),
 	)
+}
+
+func (a *AutograderService) validateEmailCode(ctx context.Context, typ, email, code string) error {
+	valid, err := a.verificationCodeRepo.Validate(ctx, typ, email, code)
+	if !valid || err != nil {
+		return status.Error(codes.InvalidArgument, "INVALID_CODE")
+	}
+	return nil
 }
 
 func (a *AutograderService) ResetPassword(ctx context.Context, request *autograder_pb.ResetPasswordRequest) (*autograder_pb.ResetPasswordResponse, error) {
@@ -73,14 +95,16 @@ func (a *AutograderService) ResetPassword(ctx context.Context, request *autograd
 	email := request.GetEmail()
 	code := request.GetCode()
 	l.Debug("ResetPassword", zap.String("email", email), zap.String("code", code))
-	valid, _ := a.verificationCodeRepo.Validate("password_reset", email, code)
-	if !valid {
-		return nil, status.Error(codes.InvalidArgument, "INVALID_CODE")
+	if err := a.validateEmailCode(ctx, PasswordResetRepoType, email, code); err != nil {
+		return nil, err
 	}
 	user, userId, err := a.userRepo.GetUserByEmail(ctx, email)
 	if err != nil {
 		l.Error("ResetPassword.GetUser", zap.String("email", email), zap.Error(err))
 		return nil, status.Error(codes.Internal, "INTERNAL_ERROR")
+	}
+	if len(request.GetPassword()) < 8 {
+		return nil, status.Error(codes.InvalidArgument, "PASSWORD_TOO_SHORT")
 	}
 	user.Password, err = bcrypt.GenerateFromPassword([]byte(request.GetPassword()), bcrypt.DefaultCost)
 	if err != nil {
@@ -94,6 +118,100 @@ func (a *AutograderService) ResetPassword(ctx context.Context, request *autograd
 	}
 	return &autograder_pb.ResetPasswordResponse{}, nil
 }
+
+func isMailValid(email string) bool {
+	_, err := mail.ParseAddress(email)
+	return err == nil
+}
+
+func isUsernameValid(username string) bool {
+	return UsernameRegExp.MatchString(username)
+}
+
+func (a *AutograderService) requestEmailCode(ctx context.Context, subject, email string, typ string, template string) {
+	if !isMailValid(email) {
+		return
+	}
+	l := ctxzap.Extract(ctx).With(zap.String("email", email))
+	codeInt := rand.Intn(ResetCodeMax)
+	codeInt += 100000
+	code := fmt.Sprintf("%d", codeInt)
+	l.Debug("RequestEmailCode.CodeGenerated", zap.String("code", code))
+	err := a.verificationCodeRepo.Issue(ctx, typ, email, code, time.Now().Add(EmailCodeValidDuration))
+	if err != nil {
+		l.Error("RequestEmailCode.Issue", zap.Error(err))
+		return
+	}
+	go func() {
+		err := retry.Do(func() error {
+			err := a.sendEmailCode(email, subject, code, template)
+			if err == nil {
+				l.Debug("RequestEmailCode.MailSent")
+			}
+			return err
+		}, retry.Attempts(3))
+		if err != nil {
+			l.Error("RequestEmailCode.SendMail", zap.Error(err))
+		}
+	}()
+}
+
+func (a *AutograderService) validateUsernameAndEmail(ctx context.Context, username string, email string) error {
+	if !isUsernameValid(username) {
+		return status.Error(codes.InvalidArgument, "INVALID_USERNAME")
+	}
+	if !isMailValid(email) {
+		return status.Error(codes.InvalidArgument, "INVALID_EMAIL")
+	}
+	userId, _ := a.userRepo.GetUserIdByEmail(ctx, email)
+	if userId != 0 {
+		return status.Error(codes.InvalidArgument, "EMAIL_DUPLICATED")
+	}
+	userId, _ = a.userRepo.GetUserIdByUsername(ctx, username)
+	if userId != 0 {
+		return status.Error(codes.InvalidArgument, "USERNAME_DUPLICATED")
+	}
+	return nil
+}
+
+func (a *AutograderService) SignUp(ctx context.Context, request *autograder_pb.SignUpRequest) (*autograder_pb.SignUpResponse, error) {
+	l := ctxzap.Extract(ctx)
+	if err := a.validateUsernameAndEmail(ctx, request.GetUsername(), request.GetEmail()); err != nil {
+		return nil, err
+	}
+	if err := a.validateEmailCode(ctx, SignUpRepoType, request.GetEmail(), request.GetCode()); err != nil {
+		return nil, err
+	}
+	if len(request.GetPassword()) < 8 {
+		return nil, status.Error(codes.InvalidArgument, "PASSWORD_TOO_SHORT")
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(request.GetPassword()), bcrypt.DefaultCost)
+	if err != nil {
+		l.Error("SignUp", zap.Error(err))
+		return nil, status.Error(codes.Internal, "PASSWORD_HASH")
+	}
+	user := &model_pb.User{
+		Username: request.GetUsername(),
+		Password: passwordHash,
+		Email:    request.GetEmail(),
+		Nickname: request.GetUsername(),
+	}
+	userId, err := a.userRepo.CreateUser(ctx, user)
+	if err != nil {
+		l.Error("SignUp.CreateUser", zap.Error(err))
+		return nil, status.Error(codes.Internal, "CREATE_USER")
+	}
+	return &autograder_pb.SignUpResponse{UserId: userId}, nil
+}
+
+func (a *AutograderService) RequestSignUpToken(ctx context.Context, request *autograder_pb.RequestSignUpTokenRequest) (*autograder_pb.RequestSignUpTokenResponse, error) {
+	if err := a.validateUsernameAndEmail(ctx, request.GetUsername(), request.GetEmail()); err != nil {
+		return nil, err
+	}
+	a.requestEmailCode(ctx, SignUpSubject, request.GetEmail(), SignUpRepoType, SignUpTemplate)
+	return &autograder_pb.RequestSignUpTokenResponse{}, nil
+}
+
 func (a *AutograderService) RequestPasswordReset(ctx context.Context, request *autograder_pb.RequestPasswordResetRequest) (*autograder_pb.RequestPasswordResetResponse, error) {
 	l := ctxzap.Extract(ctx)
 	email := request.GetEmail()
@@ -102,23 +220,7 @@ func (a *AutograderService) RequestPasswordReset(ctx context.Context, request *a
 		return nil, nil
 	}
 	l.Debug("RequestPasswordReset", zap.String("email", email))
-	codeInt := rand.Intn(ResetCodeMax)
-	codeInt += 100000
-	code := fmt.Sprintf("%d", codeInt)
-	l.Debug("RequestPasswordReset.CodeGenerated", zap.String("code", code))
-	a.verificationCodeRepo.Issue("password_reset", email, code, time.Now().Add(10*time.Minute))
-	go func() {
-		err := retry.Do(func() error {
-			err := a.sendPasswordResetCode(email, code)
-			if err == nil {
-				l.Debug("RequestPasswordReset.MailSent")
-			}
-			return err
-		}, retry.Attempts(3))
-		if err != nil {
-			l.Error("RequestPasswordReset.SendMail", zap.Error(err))
-		}
-	}()
+	a.requestEmailCode(ctx, PasswordResetSubject, email, PasswordResetRepoType, PasswordResetTemplate)
 	return &autograder_pb.RequestPasswordResetResponse{}, nil
 }
 
@@ -557,6 +659,7 @@ func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_
 	payload := &autograder_pb.UploadTokenPayload{
 		ManifestId: request.ManifestId,
 		Filename:   path.Clean(filename),
+		Filesize:   request.GetFilesize(),
 	}
 	ss, err := a.signPayloadToken(key, payload, time.Now().Add(1*time.Minute))
 	if err != nil {
@@ -882,7 +985,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 	return
 }
 
-func NewAutograderServiceServer(ls *storage.LocalStorage, mailer mailer.Mailer) *AutograderService {
+func NewAutograderServiceServer(ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client) *AutograderService {
 	db, err := pebble.Open("db", &pebble.Options{Merger: repository.NewKVMerger()})
 	if err != nil {
 		panic(err)
@@ -899,6 +1002,7 @@ func NewAutograderServiceServer(ls *storage.LocalStorage, mailer mailer.Mailer) 
 		verificationCodeRepo: repository.NewKVVerificationCodeRepository(db),
 		progGrader:           grader.NewDockerProgrammingGrader(srr),
 		mailer:               mailer,
+		captchaVerifier:      captchaVerifier,
 		ls:                   ls,
 		reportSubs:           make(map[uint64][]chan *model_pb.SubmissionReport),
 		subsMu:               &sync.Mutex{},
