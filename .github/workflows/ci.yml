@@ -12,7 +12,6 @@ jobs:
         with:
           node-version: '16'
       - uses: arduino/setup-protoc@v1
-      - run: bash proto.sh
       - run: npm install -g @angular/cli
       - run: cd web && npm install && ng build --output-path ../cmd/autograder-web
       - run: go build cmd/autograder_server.go
