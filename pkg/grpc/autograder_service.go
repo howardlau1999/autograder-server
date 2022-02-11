@@ -619,6 +619,10 @@ func (a *AutograderService) CreateSubmission(ctx context.Context, request *autog
 	if err != nil {
 		return nil, status.Error(codes.Internal, "DELETE_MANIFEST")
 	}
+	err = a.ls.Put(ctx, filepath.Join(submissionPath, ".submission"), strings.NewReader(fmt.Sprintf("%d", id)))
+	if err != nil {
+		return nil, status.Error(codes.Internal, "CREATE_MARKER")
+	}
 	resp := &autograder_pb.CreateSubmissionResponse{SubmissionId: id, Files: files}
 	go a.runSubmission(context.Background(), id, assignmentId)
 	return resp, nil
