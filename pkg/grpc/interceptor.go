@@ -85,7 +85,7 @@ func (a *AutograderService) RequireLogin(ctx context.Context, req interface{}) (
 	if err != nil {
 		return nil, err
 	}
-	payload, err := parseTokenPayload(UserJWTSignKey, token)
+	payload, err := a.parseTokenPayload(UserJWTSignKey, token)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "INVALID_TOKEN")
 	}
@@ -105,7 +105,7 @@ func (a *AutograderService) RequireLogin(ctx context.Context, req interface{}) (
 func (a *AutograderService) getCourseIdFromAssignmentId(ctx context.Context, assignmentId uint64) (uint64, *model_pb.Assignment, error) {
 	assignment, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
 	if err != nil {
-		return 0, assignment, status.Error(codes.InvalidArgument, "INVALID_ASSIGNMENT_ID")
+		return 0, assignment, status.Error(codes.NotFound, "INVALID_ASSIGNMENT_ID")
 	}
 	return assignment.GetCourseId(), assignment, nil
 }
@@ -113,7 +113,7 @@ func (a *AutograderService) getCourseIdFromAssignmentId(ctx context.Context, ass
 func (a *AutograderService) getAssignmentIdFromSubmissionId(ctx context.Context, submissionId uint64) (uint64, *model_pb.Submission, error) {
 	submission, err := a.submissionRepo.GetSubmission(ctx, submissionId)
 	if err != nil {
-		return 0, submission, status.Error(codes.InvalidArgument, "INVALID_SUBMISSION_ID")
+		return 0, submission, status.Error(codes.NotFound, "INVALID_SUBMISSION_ID")
 	}
 	return submission.GetAssignmentId(), submission, nil
 }
@@ -155,7 +155,7 @@ func (a *AutograderService) RequireInCourse(ctx context.Context, req interface{}
 	userId := user.GetUserId()
 	member := a.userRepo.GetCourseMember(ctx, userId, courseId)
 	if member == nil {
-		return nil, status.Error(codes.Unauthenticated, "NOT_IN_COURSE")
+		return nil, status.Error(codes.PermissionDenied, "NOT_IN_COURSE")
 	}
 	return context.WithValue(ctx, courseMemberCtxKey{}, member), nil
 }
@@ -163,7 +163,7 @@ func (a *AutograderService) RequireInCourse(ctx context.Context, req interface{}
 func (a *AutograderService) RequireCourseWrite(ctx context.Context, req interface{}) (context.Context, error) {
 	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
 	if member.GetRole() == model_pb.CourseRole_Reader || member.GetRole() == model_pb.CourseRole_Student {
-		return nil, status.Error(codes.Unauthenticated, "ROLE_UNAUTHORIZED")
+		return nil, status.Error(codes.PermissionDenied, "ROLE_UNAUTHORIZED")
 	}
 	return ctx, nil
 }
@@ -171,7 +171,7 @@ func (a *AutograderService) RequireCourseWrite(ctx context.Context, req interfac
 func (a *AutograderService) RequireSubmissionRead(ctx context.Context, req interface{}) (context.Context, error) {
 	submission, ok := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "SUBMISSION_UNAUTHORIZED")
+		return nil, status.Error(codes.PermissionDenied, "SUBMISSION_UNAUTHORIZED")
 	}
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	for _, submitter := range submission.GetSubmitters() {
@@ -183,7 +183,7 @@ func (a *AutograderService) RequireSubmissionRead(ctx context.Context, req inter
 	if member.GetRole() == model_pb.CourseRole_TA || member.GetRole() == model_pb.CourseRole_Instructor {
 		return ctx, nil
 	}
-	return nil, status.Error(codes.Unauthenticated, "SUBMISSION_UNAUTHORIZED")
+	return nil, status.Error(codes.PermissionDenied, "SUBMISSION_UNAUTHORIZED")
 }
 
 func (a *AutograderService) initAuthFuncs() {
@@ -240,6 +240,7 @@ func (a *AutograderService) initAuthFuncs() {
 				"UpdateCourse",
 				"UpdateAssignment",
 				"UpdateCourseMember",
+				"CanWriteCourse",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireCourseWrite},
 		},

@@ -85,9 +85,13 @@ func (a *AutograderService) sendEmailCode(to string, subject string, code string
 func (a *AutograderService) validateEmailCode(ctx context.Context, typ, email, code string) error {
 	valid, err := a.verificationCodeRepo.Validate(ctx, typ, email, code)
 	if !valid || err != nil {
-		return status.Error(codes.InvalidArgument, "INVALID_CODE")
+		return status.Error(codes.InvalidArgument, "CODE")
 	}
 	return nil
+}
+
+func (a *AutograderService) CanWriteCourse(ctx context.Context, request *autograder_pb.CanWriteCourseRequest) (*autograder_pb.CanWriteCourseResponse, error) {
+	return &autograder_pb.CanWriteCourseResponse{WritePermission: true}, nil
 }
 
 func (a *AutograderService) ResetPassword(ctx context.Context, request *autograder_pb.ResetPasswordRequest) (*autograder_pb.ResetPasswordResponse, error) {
@@ -101,10 +105,10 @@ func (a *AutograderService) ResetPassword(ctx context.Context, request *autograd
 	user, userId, err := a.userRepo.GetUserByEmail(ctx, email)
 	if err != nil {
 		l.Error("ResetPassword.GetUser", zap.String("email", email), zap.Error(err))
-		return nil, status.Error(codes.Internal, "INTERNAL_ERROR")
+		return nil, status.Error(codes.NotFound, "EMAIL")
 	}
 	if len(request.GetPassword()) < 8 {
-		return nil, status.Error(codes.InvalidArgument, "PASSWORD_TOO_SHORT")
+		return nil, status.Error(codes.InvalidArgument, "PASSWORD")
 	}
 	user.Password, err = bcrypt.GenerateFromPassword([]byte(request.GetPassword()), bcrypt.DefaultCost)
 	if err != nil {
@@ -158,18 +162,18 @@ func (a *AutograderService) requestEmailCode(ctx context.Context, subject, email
 
 func (a *AutograderService) validateUsernameAndEmail(ctx context.Context, username string, email string) error {
 	if !isUsernameValid(username) {
-		return status.Error(codes.InvalidArgument, "INVALID_USERNAME")
+		return status.Error(codes.InvalidArgument, "USERNAME")
 	}
 	if !isMailValid(email) {
-		return status.Error(codes.InvalidArgument, "INVALID_EMAIL")
+		return status.Error(codes.InvalidArgument, "EMAIL")
 	}
 	userId, _ := a.userRepo.GetUserIdByEmail(ctx, email)
 	if userId != 0 {
-		return status.Error(codes.InvalidArgument, "EMAIL_DUPLICATED")
+		return status.Error(codes.AlreadyExists, "EMAIL")
 	}
 	userId, _ = a.userRepo.GetUserIdByUsername(ctx, username)
 	if userId != 0 {
-		return status.Error(codes.InvalidArgument, "USERNAME_DUPLICATED")
+		return status.Error(codes.AlreadyExists, "USERNAME")
 	}
 	return nil
 }
@@ -183,7 +187,7 @@ func (a *AutograderService) SignUp(ctx context.Context, request *autograder_pb.S
 		return nil, err
 	}
 	if len(request.GetPassword()) < 8 {
-		return nil, status.Error(codes.InvalidArgument, "PASSWORD_TOO_SHORT")
+		return nil, status.Error(codes.InvalidArgument, "PASSWORD")
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(request.GetPassword()), bcrypt.DefaultCost)
 	if err != nil {
@@ -231,7 +235,7 @@ func (a *AutograderService) UpdateCourseMember(ctx context.Context, request *aut
 	l.Debug("UpdateCourseMember")
 	dbMember := a.userRepo.GetCourseMember(ctx, courseId, member.GetUserId())
 	if dbMember == nil {
-		return nil, status.Error(codes.InvalidArgument, "MEMBER_NOT_FOUND")
+		return nil, status.Error(codes.NotFound, "MEMBER_NOT_FOUND")
 	}
 	dbMember.Role = member.GetRole()
 	err := a.userRepo.AddCourse(ctx, dbMember)
@@ -254,7 +258,7 @@ func (a *AutograderService) UpdateCourse(ctx context.Context, request *autograde
 	l.Debug("UpdateCourse")
 	_, err := a.courseRepo.GetCourse(ctx, courseId)
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "INVALID_COURSE_ID")
+		return nil, status.Error(codes.NotFound, "INVALID_COURSE_ID")
 	}
 	err = a.courseRepo.UpdateCourse(ctx, courseId, course)
 	if err != nil {
@@ -271,7 +275,7 @@ func (a *AutograderService) UpdateAssignment(ctx context.Context, request *autog
 	l.Debug("UpdateAssignment")
 	_, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "INVALID_COURSE_ID")
+		return nil, status.Error(codes.NotFound, "INVALID_COURSE_ID")
 	}
 	err = a.assignmentRepo.UpdateAssignment(ctx, assignmentId, assignment)
 	if err != nil {
@@ -301,6 +305,7 @@ func (a *AutograderService) AddCourseMembers(ctx context.Context, request *autog
 			}
 			newUser := &model_pb.User{Email: memberToAdd.GetEmail(), Username: newUsername, Nickname: newUsername}
 			userId, err = a.userRepo.CreateUser(ctx, newUser)
+			l.Debug("AddCourseMember.CreateUser", zap.String("email", memberToAdd.GetEmail()), zap.String("username", newUsername), zap.Uint64("userId", userId))
 			if err != nil {
 				l.Error("AddCourseMember.CreateUser", zap.Error(err))
 				continue
@@ -390,11 +395,7 @@ func (a *AutograderService) InitDownload(ctx context.Context, request *autograde
 	if isFilenameInvalid(filename) {
 		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
 	}
-	submissionId := request.GetSubmissionId()
-	sub, err := a.submissionRepo.GetSubmission(ctx, submissionId)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "INVALID_SUBMISSION_ID")
-	}
+	sub := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	realpath := filepath.Join(sub.GetPath(), filename)
 	_, fn := path.Split(filename)
 	file, err := a.ls.Open(ctx, realpath)
@@ -468,24 +469,51 @@ func (a *AutograderService) CreateAssignment(ctx context.Context, request *autog
 }
 
 func (a *AutograderService) CreateCourse(ctx context.Context, request *autograder_pb.CreateCourseRequest) (*autograder_pb.CreateCourseResponse, error) {
+	l := ctxzap.Extract(ctx)
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	resp := &autograder_pb.CreateCourseResponse{}
-	course := &model_pb.Course{Name: request.GetName(), ShortName: request.GetShortName(), Description: request.GetDescription()}
+	if len(request.GetName()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "NAME")
+	}
+	if len(request.GetShortName()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "SHORT_NAME")
+	}
+	if len(request.GetDescription()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "description")
+	}
+
+	course := &model_pb.Course{
+		Name:        request.GetName(),
+		ShortName:   request.GetShortName(),
+		Description: request.GetDescription(),
+	}
+
 	courseId, err := a.courseRepo.CreateCourse(ctx, course)
 	if err != nil {
-		grpclog.Errorf("failed to create course: %v", err)
+		l.Error("CreateCourse.CreateCourse", zap.Error(err))
 		return nil, status.Error(codes.Internal, "CREATE_COURSE")
 	}
-	member := &model_pb.CourseMember{UserId: request.GetUserId(), CourseId: courseId, Role: model_pb.CourseRole_Instructor}
+
+	member := &model_pb.CourseMember{
+		UserId:   user.GetUserId(),
+		CourseId: courseId,
+		Role:     model_pb.CourseRole_Instructor,
+	}
+
 	err = a.courseRepo.AddUser(ctx, member)
 	if err != nil {
-		grpclog.Errorf("failed to add user to course: %v", err)
+		l.Error("CreateCourse.AddUser", zap.Error(err))
 		return nil, status.Error(codes.Internal, "ADD_USER")
 	}
+
 	err = a.userRepo.AddCourse(ctx, member)
 	if err != nil {
-		grpclog.Errorf("failed to add course to user: %v", err)
+		l.Error("CreateCourse.AddCourse", zap.Error(err))
 		return nil, status.Error(codes.Internal, "ADD_COURSE")
 	}
+
+	resp.CourseId = courseId
+	resp.Course = course
 	return resp, nil
 }
 
@@ -531,15 +559,16 @@ func walkDir(dirpath string, relpath string, node *autograder_pb.FileTreeNode) e
 }
 
 func (a *AutograderService) GetFilesInSubmission(ctx context.Context, request *autograder_pb.GetFilesInSubmissionRequest) (*autograder_pb.GetFilesInSubmissionResponse, error) {
-	submission, err := a.submissionRepo.GetSubmission(ctx, request.GetSubmissionId())
-	if err != nil {
-		return nil, status.Error(codes.NotFound, "NOT_FOUND")
-	}
+	submission := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	subDir := submission.GetPath()
+	l := ctxzap.Extract(ctx).With(
+		zap.Uint64("submissionId", request.GetSubmissionId()),
+		zap.String("submissionDir", subDir),
+	)
 	root := &autograder_pb.FileTreeNode{}
-	err = walkDir(subDir, "", root)
+	err := walkDir(subDir, "", root)
 	if err != nil {
-		grpclog.Errorf("failed to list files in %s: %v", subDir, err)
+		l.Error("GetFilesInSubmission.WalkDir", zap.Error(err))
 		return nil, status.Error(codes.Internal, "WALK_DIR")
 	}
 	rootPB := &autograder_pb.GetFilesInSubmissionResponse{Roots: root.GetChildren()}
@@ -548,7 +577,8 @@ func (a *AutograderService) GetFilesInSubmission(ctx context.Context, request *a
 
 func (a *AutograderService) GetCourse(ctx context.Context, request *autograder_pb.GetCourseRequest) (*autograder_pb.GetCourseResponse, error) {
 	course, err := a.courseRepo.GetCourse(ctx, request.GetCourseId())
-	resp := &autograder_pb.GetCourseResponse{Course: course}
+	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
+	resp := &autograder_pb.GetCourseResponse{Course: course, Role: member.GetRole()}
 	return resp, err
 }
 
@@ -576,7 +606,7 @@ func (a *AutograderService) CreateManifest(ctx context.Context, request *autogra
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	id, err := a.manifestRepo.CreateManifest(user.GetUserId(), request.GetAssignmentId())
 	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to create manifest")
+		return nil, status.Error(codes.Internal, "CREATE_MANIFEST")
 	}
 	resp := &autograder_pb.CreateManifestResponse{ManifestId: id}
 	return resp, nil
@@ -656,7 +686,7 @@ func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_
 	}
 	_, err := a.manifestRepo.AddFileToManifest(filename, request.GetManifestId())
 	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to add file to manifest")
+		return nil, status.Error(codes.Internal, "ADD_FILES")
 	}
 	key := UploadJWTSignKey
 
@@ -703,7 +733,7 @@ func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, requ
 	var submissions []*autograder_pb.GetSubmissionsInAssignmentResponse_SubmissionInfo
 	subIds, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, user.GetUserId(), request.GetAssignmentId())
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "NOT_FOUND")
+		return nil, status.Error(codes.NotFound, "NOT_FOUND")
 	}
 	sort.Sort(sort.Reverse(sortkeys.Uint64Slice(subIds)))
 	for _, subId := range subIds {
@@ -809,10 +839,7 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 	} else {
 		user, id, err = a.userRepo.GetUserByUsername(ctx, username)
 	}
-	if user == nil || err != nil {
-		return nil, status.Error(codes.InvalidArgument, "WRONG_PASSWORD")
-	}
-	if bcrypt.CompareHashAndPassword(user.GetPassword(), []byte(password)) != nil {
+	if user == nil || err != nil || bcrypt.CompareHashAndPassword(user.GetPassword(), []byte(password)) != nil {
 		return nil, status.Error(codes.InvalidArgument, "WRONG_PASSWORD")
 	}
 	payload := &autograder_pb.UserTokenPayload{
@@ -885,7 +912,7 @@ func (a *AutograderService) runUnfinishedSubmissions() {
 	}
 }
 
-func parseTokenPayload(key []byte, tokenString string) ([]byte, error) {
+func (a *AutograderService) parseTokenPayload(key []byte, tokenString string) ([]byte, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected singning method: %v", token.Header["alg"])
@@ -920,7 +947,7 @@ func parseTokenPayload(key []byte, tokenString string) ([]byte, error) {
 func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Request) {
 	downloadTokenString := strings.TrimSpace(r.URL.Query().Get("token"))
 	fn := chi.URLParam(r, "filename")
-	payload, err := parseTokenPayload(DownloadJWTSignKey, downloadTokenString)
+	payload, err := a.parseTokenPayload(DownloadJWTSignKey, downloadTokenString)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -938,7 +965,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 	var err error
 	normalizedContentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-type")))
 	uploadTokenString := strings.TrimSpace(r.Header.Get("Upload-token"))
-	payload, err := parseTokenPayload(UploadJWTSignKey, uploadTokenString)
+	payload, err := a.parseTokenPayload(UploadJWTSignKey, uploadTokenString)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return

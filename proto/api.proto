@@ -232,7 +232,6 @@ message CreateCourseRequest {
   string name = 1;
   string short_name = 2;
   string description = 3;
-  uint64 user_id = 4;
 }
 
 message CreateCourseResponse {
@@ -388,6 +387,14 @@ message SignUpResponse {
   uint64 user_id = 1;
 }
 
+message CanWriteCourseRequest {
+  uint64 course_id = 1;
+}
+
+message CanWriteCourseResponse {
+  bool write_permission = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -417,4 +424,5 @@ service AutograderService {
    rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
    rpc RequestSignUpToken(RequestSignUpTokenRequest) returns (RequestSignUpTokenResponse);
    rpc SignUp(SignUpRequest) returns (SignUpResponse);
+   rpc CanWriteCourse(CanWriteCourseRequest) returns (CanWriteCourseResponse);
 }

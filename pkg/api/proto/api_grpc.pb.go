@@ -50,6 +50,7 @@ type AutograderServiceClient interface {
 	ResetPassword(ctx context.Context, in *ResetPasswordRequest, opts ...grpc.CallOption) (*ResetPasswordResponse, error)
 	RequestSignUpToken(ctx context.Context, in *RequestSignUpTokenRequest, opts ...grpc.CallOption) (*RequestSignUpTokenResponse, error)
 	SignUp(ctx context.Context, in *SignUpRequest, opts ...grpc.CallOption) (*SignUpResponse, error)
+	CanWriteCourse(ctx context.Context, in *CanWriteCourseRequest, opts ...grpc.CallOption) (*CanWriteCourseResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -335,6 +336,15 @@ func (c *autograderServiceClient) SignUp(ctx context.Context, in *SignUpRequest,
 	return out, nil
 }
 
+func (c *autograderServiceClient) CanWriteCourse(ctx context.Context, in *CanWriteCourseRequest, opts ...grpc.CallOption) (*CanWriteCourseResponse, error) {
+	out := new(CanWriteCourseResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/CanWriteCourse", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -367,6 +377,7 @@ type AutograderServiceServer interface {
 	ResetPassword(context.Context, *ResetPasswordRequest) (*ResetPasswordResponse, error)
 	RequestSignUpToken(context.Context, *RequestSignUpTokenRequest) (*RequestSignUpTokenResponse, error)
 	SignUp(context.Context, *SignUpRequest) (*SignUpResponse, error)
+	CanWriteCourse(context.Context, *CanWriteCourseRequest) (*CanWriteCourseResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -457,6 +468,9 @@ func (UnimplementedAutograderServiceServer) RequestSignUpToken(context.Context, 
 }
 func (UnimplementedAutograderServiceServer) SignUp(context.Context, *SignUpRequest) (*SignUpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SignUp not implemented")
+}
+func (UnimplementedAutograderServiceServer) CanWriteCourse(context.Context, *CanWriteCourseRequest) (*CanWriteCourseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CanWriteCourse not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -978,6 +992,24 @@ func _AutograderService_SignUp_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_CanWriteCourse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CanWriteCourseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).CanWriteCourse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/CanWriteCourse",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).CanWriteCourse(ctx, req.(*CanWriteCourseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1092,6 +1124,10 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SignUp",
 			Handler:    _AutograderService_SignUp_Handler,
+		},
+		{
+			MethodName: "CanWriteCourse",
+			Handler:    _AutograderService_CanWriteCourse_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
