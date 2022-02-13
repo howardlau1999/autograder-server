@@ -89,7 +89,17 @@ func main() {
 	router.Options("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP)
 	router.Post("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileUpload)).ServeHTTP)
 	router.Get("/AutograderService/FileDownload/{filename}", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileDownload)).ServeHTTP)
-	router.Handle("/*", http.FileServer(http.FS(distFS)))
+	fsrv := http.FileServer(http.FS(distFS))
+
+	router.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := distFS.Open(r.RequestURI)
+		if err != nil {
+			http.StripPrefix(r.RequestURI, fsrv).ServeHTTP(w, r)
+		} else {
+			fsrv.ServeHTTP(w, r)
+		}
+	}))
+
 	if err := http.ListenAndServe(":9315", router); err != nil {
 		grpclog.Fatalf("Failed starting http2 server: %v", err)
 	}
