@@ -42,6 +42,7 @@ jobs:
       - uses: actions/download-artifact@v2
         with:
           name: autograder-web
+          path: pkg/web/dist
       - run: GOOS=${{ matrix.GOOS }} go build -tags containers_image_openpgp -ldflags '-w -extldflags "-static"' -o autograder-server-${{ matrix.GOOS }}${{ matrix.ext }} cmd/autograder_server.go
       - run: GOOS=${{ matrix.GOOS }} go build -tags containers_image_openpgp -ldflags '-w -extldflags "-static"' -o db-seeder-${{ matrix.GOOS }}${{ matrix.ext }} cmd/db_seeder.go
       - uses: actions/upload-artifact@v2
