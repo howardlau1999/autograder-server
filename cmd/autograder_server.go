@@ -92,7 +92,11 @@ func main() {
 	fsrv := http.FileServer(http.FS(distFS))
 
 	router.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, err := distFS.Open(r.RequestURI)
+		p := r.RequestURI
+		if len(r.RequestURI) > 1 {
+			p = r.RequestURI[1:]
+		}
+		_, err := distFS.Open(p)
 		if err != nil {
 			http.StripPrefix(r.RequestURI, fsrv).ServeHTTP(w, r)
 		} else {
