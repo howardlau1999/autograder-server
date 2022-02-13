@@ -53,7 +53,7 @@ type AutograderService struct {
 	mailer               mailer.Mailer
 	ls                   *storage.LocalStorage
 	captchaVerifier      *hcaptcha.Client
-	reportSubs           map[uint64][]chan *model_pb.SubmissionReport
+	reportSubs           map[uint64][]chan *grader.GradeFinished
 	subsMu               *sync.Mutex
 	authFuncs            map[string][]MethodAuthFunc
 }
@@ -233,7 +233,7 @@ func (a *AutograderService) UpdateCourseMember(ctx context.Context, request *aut
 	member := request.GetMember()
 	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId), zap.Uint64("userId", member.GetUserId()))
 	l.Debug("UpdateCourseMember")
-	dbMember := a.userRepo.GetCourseMember(ctx, courseId, member.GetUserId())
+	dbMember := a.userRepo.GetCourseMember(ctx, member.GetUserId(), courseId)
 	if dbMember == nil {
 		return nil, status.Error(codes.NotFound, "MEMBER_NOT_FOUND")
 	}
@@ -282,6 +282,7 @@ func (a *AutograderService) UpdateAssignment(ctx context.Context, request *autog
 		l.Error("UpdateAssignment.UpdateCourse", zap.Error(err))
 		return nil, status.Error(codes.Internal, "UPDATE_COURSE")
 	}
+	go a.pullImage(assignment.GetProgrammingConfig().GetImage())
 	return &autograder_pb.UpdateAssignmentResponse{}, nil
 }
 
@@ -445,6 +446,14 @@ func (a *AutograderService) DeleteFileInManifest(ctx context.Context, request *a
 	return &autograder_pb.DeleteFileInManifestResponse{}, nil
 }
 
+func (a *AutograderService) pullImage(image string) {
+
+	err := a.progGrader.PullImage(image)
+	if err != nil {
+		grpclog.Errorf("failed to pull image %s: %v", image, err)
+	}
+}
+
 func (a *AutograderService) CreateAssignment(ctx context.Context, request *autograder_pb.CreateAssignmentRequest) (*autograder_pb.CreateAssignmentResponse, error) {
 	resp := &autograder_pb.CreateAssignmentResponse{}
 	assignment := &model_pb.Assignment{}
@@ -455,6 +464,15 @@ func (a *AutograderService) CreateAssignment(ctx context.Context, request *autog
 	assignment.Description = request.GetDescription()
 	assignment.CourseId = request.GetCourseId()
 	assignment.ProgrammingConfig = request.GetProgrammingConfig()
+	if len(assignment.Name) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "NAME")
+	}
+	if len(assignment.Description) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "DESCRIPTION")
+	}
+	if assignment.GetDueDate().AsTime().Before(assignment.GetReleaseDate().AsTime()) {
+		return nil, status.Error(codes.InvalidArgument, "DUE_DATE")
+	}
 	assignmentId, err := a.assignmentRepo.CreateAssignment(ctx, assignment)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "CREATE_ASSIGNMENT")
@@ -465,6 +483,7 @@ func (a *AutograderService) CreateAssignment(ctx context.Context, request *autog
 	if err != nil {
 		return nil, status.Error(codes.Internal, "ADD_ASSIGNMENT")
 	}
+	go a.pullImage(request.GetProgrammingConfig().GetImage())
 	return resp, nil
 }
 
@@ -584,7 +603,8 @@ func (a *AutograderService) GetCourse(ctx context.Context, request *autograder_p
 
 func (a *AutograderService) GetAssignment(ctx context.Context, request *autograder_pb.GetAssignmentRequest) (*autograder_pb.GetAssignmentResponse, error) {
 	assignment, err := a.assignmentRepo.GetAssignment(ctx, request.GetAssignmentId())
-	resp := &autograder_pb.GetAssignmentResponse{Assignment: assignment}
+	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
+	resp := &autograder_pb.GetAssignmentResponse{Assignment: assignment, Role: member.GetRole()}
 	return resp, err
 }
 
@@ -632,7 +652,7 @@ func (a *AutograderService) CreateSubmission(ctx context.Context, request *autog
 		Submitters:      submitters,
 		Path:            submissionPath,
 		Files:           files,
-		LeaderboardName: request.GetLeaderboardName(),
+		LeaderboardName: user.GetUsername(),
 		UserId:          user.GetUserId(),
 	}
 	id, err := a.submissionRepo.CreateSubmission(ctx, submission)
@@ -704,8 +724,21 @@ func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_
 }
 
 func (a *AutograderService) SubscribeSubmission(request *autograder_pb.SubscribeSubmissionRequest, server autograder_pb.AutograderService_SubscribeSubmissionServer) error {
-	c := make(chan *model_pb.SubmissionReport)
+	c := make(chan *grader.GradeFinished)
 	id := request.GetSubmissionId()
+	l := ctxzap.Extract(server.Context()).With(zap.Uint64("submissionId", id))
+	brief, err := a.submissionReportRepo.GetSubmissionBriefReport(server.Context(), id)
+	if err != nil && err != pebble.ErrNotFound {
+		l.Error("SubscribeSubmission.GetBrief", zap.Error(err))
+		return status.Error(codes.Internal, "GET_BRIEF")
+	}
+	if err == nil {
+		return server.Send(&autograder_pb.SubscribeSubmissionResponse{
+			Score:    brief.GetScore(),
+			MaxScore: brief.GetMaxScore(),
+			Status:   brief.GetStatus(),
+		})
+	}
 	var idx int
 	a.subsMu.Lock()
 	a.reportSubs[id] = append(a.reportSubs[id], c)
@@ -721,9 +754,9 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 		return nil
 	case r := <-c:
 		return server.Send(&autograder_pb.SubscribeSubmissionResponse{
-			Score:    r.GetScore(),
-			MaxScore: r.GetMaxScore(),
-			Status:   model_pb.SubmissionStatus_Finished,
+			Score:    r.BriefReport.GetScore(),
+			MaxScore: r.BriefReport.GetMaxScore(),
+			Status:   r.BriefReport.GetStatus(),
 		})
 	}
 }
@@ -778,6 +811,7 @@ func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, requ
 
 func (a *AutograderService) GetAssignmentsInCourse(ctx context.Context, request *autograder_pb.GetAssignmentsInCourseRequest) (*autograder_pb.GetAssignmentsInCourseResponse, error) {
 	var assignments []*autograder_pb.GetAssignmentsInCourseResponse_CourseAssignmentInfo
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	assignmentIds, err := a.courseRepo.GetAssignmentsByCourse(ctx, request.GetCourseId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "GET_ASSIGNMENTS")
@@ -787,12 +821,16 @@ func (a *AutograderService) GetAssignmentsInCourse(ctx context.Context, request 
 		if err != nil {
 			return nil, status.Error(codes.Internal, "GET_ASSIGNMENT")
 		}
+		subs, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, user.GetUserId(), asgnId)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "GET_SUBMISSIONS")
+		}
 		ret := &autograder_pb.GetAssignmentsInCourseResponse_CourseAssignmentInfo{
 			AssignmentId: asgnId,
 			Name:         assignment.Name,
 			ReleaseDate:  assignment.ReleaseDate,
 			DueDate:      assignment.DueDate,
-			Submitted:    true,
+			Submitted:    len(subs) > 0,
 		}
 		assignments = append(assignments, ret)
 	}
@@ -873,7 +911,7 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 		return
 	}
 	config := assignment.ProgrammingConfig
-	notifyC := make(chan *model_pb.SubmissionReport)
+	notifyC := make(chan *grader.GradeFinished)
 	go a.progGrader.GradeSubmission(submissionId, submission, config, notifyC)
 	go func() {
 		r := <-notifyC
@@ -886,11 +924,11 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 				sub <- r
 			}
 		}
-		if len(r.Leaderboard) > 0 {
+		if len(r.Report.Leaderboard) > 0 {
 			if err := a.leaderboardRepo.UpdateLeaderboardEntry(ctx, assignmentId, submission.GetUserId(), &model_pb.LeaderboardEntry{
 				SubmissionId: submissionId,
 				Nickname:     submission.GetLeaderboardName(),
-				Items:        r.Leaderboard,
+				Items:        r.Report.Leaderboard,
 			}); err != nil {
 				grpclog.Errorf("failed to update leaderboard: %v", err)
 			}
@@ -1035,7 +1073,7 @@ func NewAutograderServiceServer(ls *storage.LocalStorage, mailer mailer.Mailer, 
 		mailer:               mailer,
 		captchaVerifier:      captchaVerifier,
 		ls:                   ls,
-		reportSubs:           make(map[uint64][]chan *model_pb.SubmissionReport),
+		reportSubs:           make(map[uint64][]chan *grader.GradeFinished),
 		subsMu:               &sync.Mutex{},
 	}
 	a.initAuthFuncs()

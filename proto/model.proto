@@ -95,6 +95,7 @@ message LeaderboardEntry {
   uint64 submission_id = 1;
   string nickname = 2;
   repeated LeaderboardItem items = 3;
+  uint64 user_id = 4;
 }
 
 message SubmissionReportTestcase {

@@ -182,6 +182,7 @@ message GetAssignmentRequest {
 
 message GetAssignmentResponse {
   Assignment assignment = 1;
+  CourseRole role = 2;
 }
 
 message GetCourseRequest {

@@ -20,12 +20,22 @@ import (
 )
 
 type ProgrammingGrader interface {
-	GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig, notifyC chan *model_pb.SubmissionReport)
+	PullImage(image string) error
+	GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig, notifyC chan *GradeFinished)
 }
 
 type DockerProgrammingGrader struct {
 	cli *client.Client
 	srr repository.SubmissionReportRepository
+}
+
+func (d *DockerProgrammingGrader) PullImage(image string) error {
+	closer, err := d.cli.ImagePull(context.Background(), image, types.ImagePullOptions{})
+	if err != nil {
+		return err
+	}
+	_, err = ioutil.ReadAll(closer)
+	return err
 }
 
 func (d *DockerProgrammingGrader) runDocker(ctx context.Context, submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig) (internalError int64, exitCode int64, resultsJSONPath string) {
@@ -121,7 +131,12 @@ func (d *DockerProgrammingGrader) runDocker(ctx context.Context, submissionId ui
 	return
 }
 
-func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig, notifyC chan *model_pb.SubmissionReport) {
+type GradeFinished struct {
+	Report      *model_pb.SubmissionReport
+	BriefReport *model_pb.SubmissionBriefReport
+}
+
+func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig, notifyC chan *GradeFinished) {
 	briefPB := &model_pb.SubmissionBriefReport{
 		Status: model_pb.SubmissionStatus_Running,
 	}
@@ -174,13 +189,19 @@ WriteReport:
 		InternalError: resultsPB.InternalError,
 		Status:        model_pb.SubmissionStatus_Finished,
 	}
+	if internalError != 0 {
+		briefPB.Status = model_pb.SubmissionStatus_Failed
+	}
 	err = d.srr.UpdateSubmissionBriefReport(ctx, submissionId, briefPB)
 	if err != nil {
 		grpclog.Errorf("failed to update submission brief report for %d: %v", submissionId, err)
 	}
 	_ = d.srr.DeleteUnfinishedSubmission(ctx, submissionId)
 	if notifyC != nil {
-		notifyC <- resultsPB
+		notifyC <- &GradeFinished{
+			Report:      resultsPB,
+			BriefReport: briefPB,
+		}
 	}
 }
 
