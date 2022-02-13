@@ -11,14 +11,14 @@ jobs:
       - uses: actions/setup-node@v2
         with:
           node-version: '16'
-      - run: npm install -g @angular/cli
-      - run: cd web && npm install
       - uses: actions/cache@v2
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
+      - run: npm install -g @angular/cli
+      - run: cd web && npm install
       - run: cd web && ng build --output-path ../pkg/web/dist
       - uses: actions/upload-artifact@v2
         with:
