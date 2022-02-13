@@ -19,7 +19,7 @@ jobs:
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
-      - run: ng build --output-path ../pkg/web/dist
+      - run: cd web && ng build --output-path ../pkg/web/dist
       - uses: actions/upload-artifact@v2
         with:
           name: autograder-web
