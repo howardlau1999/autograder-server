@@ -727,12 +727,15 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 	c := make(chan *grader.GradeFinished)
 	id := request.GetSubmissionId()
 	l := ctxzap.Extract(server.Context()).With(zap.Uint64("submissionId", id))
+	a.subsMu.Lock()
 	brief, err := a.submissionReportRepo.GetSubmissionBriefReport(server.Context(), id)
 	if err != nil && err != pebble.ErrNotFound {
 		l.Error("SubscribeSubmission.GetBrief", zap.Error(err))
+		a.subsMu.Unlock()
 		return status.Error(codes.Internal, "GET_BRIEF")
 	}
-	if err == nil {
+	if err == nil && brief.GetStatus() != model_pb.SubmissionStatus_Running {
+		a.subsMu.Unlock()
 		return server.Send(&autograder_pb.SubscribeSubmissionResponse{
 			Score:    brief.GetScore(),
 			MaxScore: brief.GetMaxScore(),
@@ -740,7 +743,7 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 		})
 	}
 	var idx int
-	a.subsMu.Lock()
+	l.Debug("SubscribeSubmission.Begin")
 	a.reportSubs[id] = append(a.reportSubs[id], c)
 	idx = len(a.reportSubs) - 1
 	a.subsMu.Unlock()
@@ -915,15 +918,7 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 	go a.progGrader.GradeSubmission(submissionId, submission, config, notifyC)
 	go func() {
 		r := <-notifyC
-		a.subsMu.Lock()
-		subs := a.reportSubs[submissionId]
-		delete(a.reportSubs, submissionId)
-		a.subsMu.Unlock()
-		for _, sub := range subs {
-			if sub != nil {
-				sub <- r
-			}
-		}
+		grpclog.Infof("submission %d finished", submissionId)
 		if len(r.Report.Leaderboard) > 0 {
 			if err := a.leaderboardRepo.UpdateLeaderboardEntry(ctx, assignmentId, submission.GetUserId(), &model_pb.LeaderboardEntry{
 				SubmissionId: submissionId,
@@ -933,6 +928,14 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 				grpclog.Errorf("failed to update leaderboard: %v", err)
 			}
 		}
+		a.subsMu.Lock()
+		for _, sub := range a.reportSubs[submissionId] {
+			if sub != nil {
+				sub <- r
+			}
+		}
+		delete(a.reportSubs, submissionId)
+		a.subsMu.Unlock()
 	}()
 }
 
