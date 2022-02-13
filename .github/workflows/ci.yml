@@ -20,7 +20,7 @@ jobs:
       - uses: arduino/setup-protoc@v1
       - run: npm install -g @angular/cli
       - run: cd web && npm install && ng build --output-path ../pkg/web/dist
-      - run: GOOS=${{ matrix.GOOS }} go build -tags containers_image_openpgp -ldflags '-w -extldflags "-static"' cmd/autograder_server.go -o autograder-server-${{ matrix.GOOS }}
+      - run: GOOS=${{ matrix.GOOS }} go build -tags containers_image_openpgp -ldflags '-w -extldflags "-static"' -o autograder-server-${{ matrix.GOOS }} cmd/autograder_server.go
       - uses: actions/upload-artifact@v2
         with:
           name: autograder-server-${{ matrix.GOOS }}
