@@ -6,6 +6,7 @@ import (
 	"autograder-server/pkg/mailer"
 	"autograder-server/pkg/middleware"
 	"autograder-server/pkg/storage"
+	"autograder-server/pkg/web"
 	"github.com/go-chi/chi"
 	chiMiddleware "github.com/go-chi/chi/middleware"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
@@ -21,6 +22,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
+	"io/fs"
 	"math/rand"
 	"net/http"
 	"os"
@@ -36,6 +38,10 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 	ls := &storage.LocalStorage{}
 	m := mailer.NewSMTPMailer(os.Getenv("SMTP_ADDR"), os.Getenv("SMTP_USER"), os.Getenv("SMTP_PASS"))
+	distFS, err := fs.Sub(web.WebResources, "dist")
+	if err != nil {
+		panic(err)
+	}
 	hcaptchaClient := hcaptcha.New(os.Getenv("HCAPTCHA_SECRET"))
 	corsHandler := cors.New(cors.Options{
 		AllowOriginFunc: func(origin string) bool {
@@ -79,13 +85,11 @@ func main() {
 	}))
 	router := chi.NewRouter()
 	router.Use(chiMiddleware.Logger, chiMiddleware.Recoverer, middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler)
-	router.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
 	router.Get("/metrics", promhttp.Handler().ServeHTTP)
 	router.Options("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP)
 	router.Post("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileUpload)).ServeHTTP)
 	router.Get("/AutograderService/FileDownload/{filename}", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileDownload)).ServeHTTP)
+	router.Handle("/*", http.FileServer(http.FS(distFS)))
 	if err := http.ListenAndServe(":9315", router); err != nil {
 		grpclog.Fatalf("Failed starting http2 server: %v", err)
 	}
