@@ -1081,7 +1081,16 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 	return
 }
 
-func (a *AutograderService) getGithubUser(ctx context.Context, code string) (*github.User, []*github.UserEmail, error) {
+func (a *AutograderService) getGithubEmails(ctx context.Context, token *oauth2.Token) ([]*github.UserEmail, error) {
+	ghClient := github.NewClient(oauth2.NewClient(ctx, oauth2.StaticTokenSource(token)))
+	emails, _, err := ghClient.Users.ListEmails(ctx, nil)
+	if err != nil || len(emails) == 0 {
+		return nil, status.Error(codes.Internal, "GET_GITHUB_EMAILS")
+	}
+	return emails, nil
+}
+
+func (a *AutograderService) getGithubUser(ctx context.Context, code string) (*github.User, *oauth2.Token, error) {
 	token, err := a.githubOAuth2Config.Exchange(ctx, code)
 	if err != nil {
 		return nil, nil, status.Error(codes.InvalidArgument, "INVALID_CODE")
@@ -1091,16 +1100,28 @@ func (a *AutograderService) getGithubUser(ctx context.Context, code string) (*gi
 	if err != nil {
 		return nil, nil, status.Error(codes.Internal, "GET_GITHUB_USER")
 	}
-	emails, _, err := ghClient.Users.ListEmails(ctx, nil)
-	if err != nil || len(emails) == 0 {
-		return nil, nil, status.Error(codes.Internal, "GET_GITHUB_EMAILS")
-	}
-	return ghUser, emails, nil
+	return ghUser, token, nil
 }
 
 func (a *AutograderService) GithubLogin(ctx context.Context, request *autograder_pb.GithubLoginRequest) (*autograder_pb.GithubLoginResponse, error) {
 	l := ctxzap.Extract(ctx)
-	ghUser, emails, err := a.getGithubUser(ctx, request.Code)
+	ghUser, token, err := a.getGithubUser(ctx, request.Code)
+	if err != nil {
+		return nil, err
+	}
+
+	login := ghUser.GetLogin()
+	l.Debug("GithubLogin", zap.String("githubId", login))
+
+	user, userId, err := a.userRepo.GetUserByGithubId(ctx, login)
+	if user != nil {
+		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname); err != nil {
+			return nil, err
+		}
+		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
+	}
+
+	emails, err := a.getGithubEmails(ctx, token)
 	if err != nil {
 		return nil, err
 	}
@@ -1110,19 +1131,6 @@ func (a *AutograderService) GithubLogin(ctx context.Context, request *autograder
 			email = e.GetEmail()
 			break
 		}
-	}
-	login := ghUser.GetLogin()
-	l.Debug("GithubLogin", zap.String("githubId", login))
-	if len(email) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "INVALID_EMAIL")
-	}
-
-	user, userId, err := a.userRepo.GetUserByGithubId(ctx, login)
-	if user != nil {
-		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname); err != nil {
-			return nil, err
-		}
-		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
 	}
 
 	user, userId, err = a.userRepo.GetUserByEmail(ctx, email)
