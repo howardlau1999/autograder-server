@@ -16,6 +16,7 @@ type SMTPMailer struct {
 	auth smtp.Auth
 	host string
 	addr string
+	user string
 }
 
 func (s *SMTPMailer) sendMailTLS(from string, to []string, body []byte) error {
@@ -62,10 +63,12 @@ func (s *SMTPMailer) SendMail(from string, to []string, subject, content string)
 	msg += fmt.Sprintf("To: %s\r\n", strings.Join(to, ";"))
 	msg += fmt.Sprintf("Subject: %s\r\n", subject)
 	msg += fmt.Sprintf("\r\n%s\r\n", content)
-	return s.sendMailTLS(from, to, []byte(msg))
+	return s.sendMailTLS(s.user, to, []byte(msg))
 }
 
 func NewSMTPMailer(addr, username, password string) Mailer {
 	host, _, _ := net.SplitHostPort(addr)
-	return &SMTPMailer{auth: smtp.PlainAuth("", username, password, host), host: host, addr: addr}
+	s := &SMTPMailer{auth: smtp.PlainAuth("", username, password, host), host: host, addr: addr}
+	s.user = username
+	return s
 }

@@ -15,10 +15,13 @@ import (
 	"github.com/go-chi/chi"
 	"github.com/gogo/protobuf/sortkeys"
 	"github.com/golang-jwt/jwt"
+	"github.com/google/go-github/v42/github"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/kataras/hcaptcha"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/grpclog"
@@ -56,6 +59,7 @@ type AutograderService struct {
 	reportSubs           map[uint64][]chan *grader.GradeFinished
 	subsMu               *sync.Mutex
 	authFuncs            map[string][]MethodAuthFunc
+	githubOAuth2Config   *oauth2.Config
 }
 
 var DownloadJWTSignKey = []byte("download-token-sign-key")
@@ -75,7 +79,7 @@ var EmailCodeValidDuration = 10 * time.Minute
 
 func (a *AutograderService) sendEmailCode(to string, subject string, code string, template string) error {
 	return a.mailer.SendMail(
-		os.Getenv("SMTP_FROM"),
+		viper.GetString("smtp-from"),
 		[]string{to},
 		subject,
 		fmt.Sprintf(template, code),
@@ -178,32 +182,44 @@ func (a *AutograderService) validateUsernameAndEmail(ctx context.Context, userna
 	return nil
 }
 
-func (a *AutograderService) SignUp(ctx context.Context, request *autograder_pb.SignUpRequest) (*autograder_pb.SignUpResponse, error) {
+func (a *AutograderService) signUpNewUser(ctx context.Context, email, username string, password string) (uint64, error) {
 	l := ctxzap.Extract(ctx)
-	if err := a.validateUsernameAndEmail(ctx, request.GetUsername(), request.GetEmail()); err != nil {
-		return nil, err
+	if err := a.validateUsernameAndEmail(ctx, username, email); err != nil {
+		return 0, err
 	}
+	var passwordHash []byte
+	var err error
+	if len(password) > 0 {
+		passwordHash, err = bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			l.Error("SignUp", zap.Error(err))
+			return 0, status.Error(codes.Internal, "PASSWORD_HASH")
+		}
+	}
+	user := &model_pb.User{
+		Username: username,
+		Password: passwordHash,
+		Email:    email,
+		Nickname: username,
+	}
+	userId, err := a.userRepo.CreateUser(ctx, user)
+	if err != nil {
+		l.Error("SignUp.CreateUser", zap.Error(err))
+		return 0, status.Error(codes.Internal, "CREATE_USER")
+	}
+	return userId, nil
+}
+
+func (a *AutograderService) SignUp(ctx context.Context, request *autograder_pb.SignUpRequest) (*autograder_pb.SignUpResponse, error) {
 	if err := a.validateEmailCode(ctx, SignUpRepoType, request.GetEmail(), request.GetCode()); err != nil {
 		return nil, err
 	}
 	if len(request.GetPassword()) < 8 {
 		return nil, status.Error(codes.InvalidArgument, "PASSWORD")
 	}
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(request.GetPassword()), bcrypt.DefaultCost)
+	userId, err := a.signUpNewUser(ctx, request.GetEmail(), request.GetUsername(), request.GetPassword())
 	if err != nil {
-		l.Error("SignUp", zap.Error(err))
-		return nil, status.Error(codes.Internal, "PASSWORD_HASH")
-	}
-	user := &model_pb.User{
-		Username: request.GetUsername(),
-		Password: passwordHash,
-		Email:    request.GetEmail(),
-		Nickname: request.GetUsername(),
-	}
-	userId, err := a.userRepo.CreateUser(ctx, user)
-	if err != nil {
-		l.Error("SignUp.CreateUser", zap.Error(err))
-		return nil, status.Error(codes.Internal, "CREATE_USER")
+		return nil, err
 	}
 	return &autograder_pb.SignUpResponse{UserId: userId}, nil
 }
@@ -652,7 +668,7 @@ func (a *AutograderService) CreateSubmission(ctx context.Context, request *autog
 		Submitters:      submitters,
 		Path:            submissionPath,
 		Files:           files,
-		LeaderboardName: user.GetUsername(),
+		LeaderboardName: user.GetNickname(),
 		UserId:          user.GetUserId(),
 	}
 	id, err := a.submissionRepo.CreateSubmission(ctx, submission)
@@ -867,6 +883,24 @@ func (a *AutograderService) GetCourseList(ctx context.Context, request *autograd
 	return response, nil
 }
 
+func (a *AutograderService) signLoginToken(ctx context.Context, userId uint64, username string, nickname string) error {
+	payload := &autograder_pb.UserTokenPayload{
+		UserId:   userId,
+		Username: username,
+		Nickname: nickname,
+	}
+	ss, err := a.signPayloadToken(UserJWTSignKey, payload, time.Now().Add(3*time.Hour))
+	if err != nil {
+		return err
+	}
+	refreshMD := metadata.Pairs("token", ss)
+	err = grpc.SetHeader(ctx, refreshMD)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.LoginRequest) (*autograder_pb.LoginResponse, error) {
 	l := ctxzap.Extract(ctx)
 	username := request.GetUsername()
@@ -883,17 +917,7 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 	if user == nil || err != nil || bcrypt.CompareHashAndPassword(user.GetPassword(), []byte(password)) != nil {
 		return nil, status.Error(codes.InvalidArgument, "WRONG_PASSWORD")
 	}
-	payload := &autograder_pb.UserTokenPayload{
-		UserId:   id,
-		Username: username,
-	}
-	ss, err := a.signPayloadToken(UserJWTSignKey, payload, time.Now().Add(3*time.Hour))
-	if err != nil {
-		return nil, err
-	}
-	refreshMD := metadata.Pairs("token", ss)
-	err = grpc.SetHeader(ctx, refreshMD)
-	if err != nil {
+	if err := a.signLoginToken(ctx, id, username, user.Nickname); err != nil {
 		return nil, err
 	}
 	response := &autograder_pb.LoginResponse{
@@ -1057,7 +1081,169 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 	return
 }
 
-func NewAutograderServiceServer(ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client) *AutograderService {
+func (a *AutograderService) getGithubUser(ctx context.Context, code string) (*github.User, []*github.UserEmail, error) {
+	token, err := a.githubOAuth2Config.Exchange(ctx, code)
+	if err != nil {
+		return nil, nil, status.Error(codes.InvalidArgument, "INVALID_CODE")
+	}
+	ghClient := github.NewClient(oauth2.NewClient(ctx, oauth2.StaticTokenSource(token)))
+	ghUser, _, err := ghClient.Users.Get(ctx, "")
+	if err != nil {
+		return nil, nil, status.Error(codes.Internal, "GET_GITHUB_USER")
+	}
+	emails, _, err := ghClient.Users.ListEmails(ctx, nil)
+	if err != nil || len(emails) == 0 {
+		return nil, nil, status.Error(codes.Internal, "GET_GITHUB_EMAILS")
+	}
+	return ghUser, emails, nil
+}
+
+func (a *AutograderService) GithubLogin(ctx context.Context, request *autograder_pb.GithubLoginRequest) (*autograder_pb.GithubLoginResponse, error) {
+	l := ctxzap.Extract(ctx)
+	ghUser, emails, err := a.getGithubUser(ctx, request.Code)
+	if err != nil {
+		return nil, err
+	}
+	email := emails[0].GetEmail()
+	for _, e := range emails {
+		if e.GetPrimary() {
+			email = e.GetEmail()
+			break
+		}
+	}
+	login := ghUser.GetLogin()
+	l.Debug("GithubLogin", zap.String("githubId", login))
+	if len(email) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_EMAIL")
+	}
+
+	user, userId, err := a.userRepo.GetUserByGithubId(ctx, login)
+	if user != nil {
+		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname); err != nil {
+			return nil, err
+		}
+		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
+	}
+
+	user, userId, err = a.userRepo.GetUserByEmail(ctx, email)
+	if user != nil {
+		if user.GetGithubId() != login {
+			return nil, status.Error(codes.AlreadyExists, "EMAIL_DIFFERENT")
+		}
+		if err := a.userRepo.BindGithubId(ctx, userId, login); err != nil {
+			return nil, status.Error(codes.Internal, "BIND_GITHUB_ID")
+		}
+		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname); err != nil {
+			return nil, err
+		}
+		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
+	}
+
+	user, userId, err = a.userRepo.GetUserByUsername(ctx, login)
+	if user != nil {
+		if user.GetGithubId() != login {
+			return nil, status.Error(codes.AlreadyExists, "USERNAME_DIFFERENT")
+		}
+		if err := a.userRepo.BindGithubId(ctx, userId, login); err != nil {
+			return nil, status.Error(codes.Internal, "BIND_GITHUB_ID")
+		}
+		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname); err != nil {
+			return nil, err
+		}
+		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
+	}
+
+	userId, err = a.signUpNewUser(ctx, email, login, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := a.userRepo.BindGithubId(ctx, userId, login); err != nil {
+		return nil, status.Error(codes.Internal, "BIND_GITHUB_ID")
+	}
+	if err := a.signLoginToken(ctx, userId, login, login); err != nil {
+		return nil, err
+	}
+	return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
+}
+
+func (a *AutograderService) GetUser(ctx context.Context, request *autograder_pb.GetUserRequest) (*autograder_pb.GetUserResponse, error) {
+	l := ctxzap.Extract(ctx)
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	l.Debug("GetUser", zap.String("username", user.GetUsername()))
+	dbUser, err := a.userRepo.GetUserById(ctx, user.GetUserId())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "GET_USER")
+	}
+	dbUser.Password = nil
+	return &autograder_pb.GetUserResponse{User: dbUser}, nil
+}
+
+func (a *AutograderService) UnbindGithub(ctx context.Context, request *autograder_pb.UnbindGithubRequest) (*autograder_pb.UnbindGithubResponse, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	err := a.userRepo.UnbindGithubId(ctx, user.GetUserId())
+	if err != nil {
+		return &autograder_pb.UnbindGithubResponse{Success: false}, nil
+	}
+	return &autograder_pb.UnbindGithubResponse{Success: true}, nil
+}
+
+func (a *AutograderService) BindGithub(ctx context.Context, request *autograder_pb.BindGithubRequest) (*autograder_pb.BindGithubResponse, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	ghUser, _, err := a.getGithubUser(ctx, request.Code)
+	if err != nil {
+		return nil, err
+	}
+	login := ghUser.GetLogin()
+	if len(login) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_GITHUB_LOGIN")
+	}
+	bindUserId, err := a.userRepo.GetUserIdByGithubId(ctx, login)
+	if bindUserId != 0 {
+		return nil, status.Error(codes.AlreadyExists, "ALREADY_IN_USE")
+	}
+	err = a.userRepo.BindGithubId(ctx, user.GetUserId(), login)
+	if err != nil {
+		return &autograder_pb.BindGithubResponse{Success: false}, nil
+	}
+	return &autograder_pb.BindGithubResponse{Success: true}, nil
+}
+
+func (a *AutograderService) UpdateUser(ctx context.Context, request *autograder_pb.UpdateUserRequest) (*autograder_pb.UpdateUserResponse, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	dbUser, err := a.userRepo.GetUserById(ctx, user.GetUserId())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "GET_USER")
+	}
+	dbUser.Nickname = request.GetNickname()
+	dbUser.StudentId = request.GetStudentId()
+	err = a.userRepo.UpdateUser(ctx, user.GetUserId(), dbUser)
+	if err != nil {
+		return &autograder_pb.UpdateUserResponse{Success: false}, nil
+	}
+	return &autograder_pb.UpdateUserResponse{Success: true}, nil
+}
+
+func (a *AutograderService) UpdatePassword(ctx context.Context, request *autograder_pb.UpdatePasswordRequest) (*autograder_pb.UpdatePasswordResponse, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	dbUser, err := a.userRepo.GetUserById(ctx, user.GetUserId())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "GET_USER")
+	}
+	if err := bcrypt.CompareHashAndPassword(dbUser.Password, []byte(request.OldPassword)); err != nil {
+		return &autograder_pb.UpdatePasswordResponse{Success: false}, nil
+	}
+	dbUser.Password, err = bcrypt.GenerateFromPassword([]byte(request.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "PASSWORD_HASH")
+	}
+	err = a.userRepo.UpdateUser(ctx, user.GetUserId(), dbUser)
+	if err != nil {
+		return &autograder_pb.UpdatePasswordResponse{Success: false}, nil
+	}
+	return &autograder_pb.UpdatePasswordResponse{Success: true}, nil
+}
+
+func NewAutograderServiceServer(ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client, ghOauth2Config *oauth2.Config) *AutograderService {
 	db, err := pebble.Open("db", &pebble.Options{Merger: repository.NewKVMerger()})
 	if err != nil {
 		panic(err)
@@ -1073,6 +1259,7 @@ func NewAutograderServiceServer(ls *storage.LocalStorage, mailer mailer.Mailer, 
 		leaderboardRepo:      repository.NewKVLeaderboardRepository(db),
 		verificationCodeRepo: repository.NewKVVerificationCodeRepository(db),
 		progGrader:           grader.NewDockerProgrammingGrader(srr),
+		githubOAuth2Config:   ghOauth2Config,
 		mailer:               mailer,
 		captchaVerifier:      captchaVerifier,
 		ls:                   ls,

@@ -150,6 +150,7 @@ message UploadTokenPayload {
 message UserTokenPayload {
   uint64 user_id = 1;
   string username = 2;
+  string nickname = 3;
 }
 
 message DownloadTokenPayload {
@@ -396,6 +397,57 @@ message CanWriteCourseResponse {
   bool write_permission = 1;
 }
 
+message GithubLoginRequest {
+  string code = 1;
+}
+
+message GithubLoginResponse {
+  uint64 user_id = 1;
+  string token = 2;
+}
+
+message BindGithubRequest {
+  string code = 1;
+}
+
+message BindGithubResponse {
+  bool success = 1;
+}
+
+message UnbindGithubRequest {
+
+}
+
+message UnbindGithubResponse {
+  bool success = 1;
+}
+
+message GetUserRequest {
+
+}
+
+message GetUserResponse {
+  User user = 1;
+}
+
+message UpdateUserRequest {
+  string nickname = 1;
+  string student_id = 2;
+}
+
+message UpdateUserResponse {
+  bool success = 1;
+}
+
+message UpdatePasswordRequest {
+  string old_password = 1;
+  string new_password = 2;
+}
+
+message UpdatePasswordResponse {
+  bool success = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -426,4 +478,10 @@ service AutograderService {
    rpc RequestSignUpToken(RequestSignUpTokenRequest) returns (RequestSignUpTokenResponse);
    rpc SignUp(SignUpRequest) returns (SignUpResponse);
    rpc CanWriteCourse(CanWriteCourseRequest) returns (CanWriteCourseResponse);
+   rpc GithubLogin(GithubLoginRequest) returns (GithubLoginResponse);
+   rpc GetUser(GetUserRequest) returns (GetUserResponse);
+   rpc BindGithub(BindGithubRequest) returns (BindGithubResponse);
+   rpc UnbindGithub(UnbindGithubRequest) returns (UnbindGithubResponse);
+   rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
+   rpc UpdatePassword(UpdatePasswordRequest) returns (UpdatePasswordResponse);
 }

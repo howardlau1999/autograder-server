@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/cockroachdb/pebble"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type UserRepository interface {
@@ -21,6 +22,10 @@ type UserRepository interface {
 	RemoveCourseMember(ctx context.Context, userId uint64, courseId uint64) error
 	GetUserByEmail(ctx context.Context, email string) (*model_pb.User, uint64, error)
 	GetUserIdByEmail(ctx context.Context, email string) (uint64, error)
+	BindGithubId(ctx context.Context, userId uint64, githubId string) error
+	UnbindGithubId(ctx context.Context, userId uint64) error
+	GetUserIdByGithubId(ctx context.Context, githubId string) (uint64, error)
+	GetUserByGithubId(ctx context.Context, githubId string) (*model_pb.User, uint64, error)
 }
 
 type KVUserRepository struct {
@@ -29,7 +34,7 @@ type KVUserRepository struct {
 }
 
 func (ur *KVUserRepository) GetUserIdByUsername(ctx context.Context, username string) (uint64, error) {
-	idBytes, closer, err := ur.db.Get(ur.getUserNameKey(username))
+	idBytes, closer, err := ur.db.Get(ur.getUsernameKey(username))
 	if err != nil {
 		return 0, err
 	}
@@ -85,8 +90,12 @@ func (ur *KVUserRepository) getUserIdKey(userId uint64) []byte {
 	return []byte(fmt.Sprintf("user:id:%d", userId))
 }
 
-func (ur *KVUserRepository) getUserNameKey(name string) []byte {
+func (ur *KVUserRepository) getUsernameKey(name string) []byte {
 	return []byte(fmt.Sprintf("user:name:%s", name))
+}
+
+func (ur *KVUserRepository) getGithubIdKey(githubId string) []byte {
+	return []byte(fmt.Sprintf("user:github:%s", githubId))
 }
 
 func (ur *KVUserRepository) getEmailKey(email string) []byte {
@@ -110,6 +119,27 @@ func (ur *KVUserRepository) GetUserIdByEmail(ctx context.Context, email string) 
 	return binary.BigEndian.Uint64(idBytes), nil
 }
 
+func (ur *KVUserRepository) GetUserIdByGithubId(ctx context.Context, githubId string) (uint64, error) {
+	idBytes, closer, err := ur.db.Get(ur.getGithubIdKey(githubId))
+	if err != nil {
+		return 0, err
+	}
+	defer closer.Close()
+	return binary.BigEndian.Uint64(idBytes), nil
+}
+
+func (ur *KVUserRepository) GetUserByGithubId(ctx context.Context, githubId string) (*model_pb.User, uint64, error) {
+	userId, err := ur.GetUserIdByGithubId(ctx, githubId)
+	if err != nil {
+		return nil, 0, err
+	}
+	user, err := ur.GetUserById(ctx, userId)
+	if err != nil {
+		return nil, 0, err
+	}
+	return user, userId, nil
+}
+
 func (ur *KVUserRepository) GetUserByEmail(ctx context.Context, email string) (*model_pb.User, uint64, error) {
 	userId, err := ur.GetUserIdByEmail(ctx, email)
 	if err != nil {
@@ -119,8 +149,39 @@ func (ur *KVUserRepository) GetUserByEmail(ctx context.Context, email string) (*
 	return user, userId, err
 }
 
+func (ur *KVUserRepository) UnbindGithubId(ctx context.Context, userId uint64) error {
+	user, err := ur.GetUserById(ctx, userId)
+	if err != nil {
+		return err
+	}
+	githubId := user.GetGithubId()
+	user.GithubId = ""
+	err = ur.UpdateUser(ctx, userId, user)
+	if err != nil {
+		return err
+	}
+	if len(githubId) > 0 {
+		return ur.db.Delete(ur.getGithubIdKey(githubId), pebble.Sync)
+	}
+	return nil
+}
+
+func (ur *KVUserRepository) BindGithubId(ctx context.Context, userId uint64, githubId string) error {
+	user, err := ur.GetUserById(ctx, userId)
+	if err != nil {
+		return err
+	}
+	user.GithubId = githubId
+	err = ur.UpdateUser(ctx, userId, user)
+	if err != nil {
+		return err
+	}
+	return ur.db.Set(ur.getGithubIdKey(githubId), Uint64ToBytes(userId), pebble.Sync)
+}
+
 func (ur *KVUserRepository) CreateUser(ctx context.Context, user *model_pb.User) (uint64, error) {
-	idBytes, closer, err := ur.db.Get(ur.getUserNameKey(user.Username))
+	user.CreatedAt = timestamppb.Now()
+	idBytes, closer, err := ur.db.Get(ur.getUsernameKey(user.Username))
 	if err != pebble.ErrNotFound {
 		if err == nil {
 			closer.Close()
@@ -137,7 +198,7 @@ func (ur *KVUserRepository) CreateUser(ctx context.Context, user *model_pb.User)
 	}
 	batch := ur.db.NewBatch()
 	err = batch.Set(ur.getUserIdKey(id), raw, pebble.Sync)
-	err = batch.Set(ur.getUserNameKey(user.Username), Uint64ToBytes(id), pebble.Sync)
+	err = batch.Set(ur.getUsernameKey(user.Username), Uint64ToBytes(id), pebble.Sync)
 	err = batch.Set(ur.getEmailKey(user.Email), Uint64ToBytes(id), pebble.Sync)
 	err = batch.Commit(pebble.Sync)
 	return id, nil

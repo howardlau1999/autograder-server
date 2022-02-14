@@ -51,6 +51,12 @@ type AutograderServiceClient interface {
 	RequestSignUpToken(ctx context.Context, in *RequestSignUpTokenRequest, opts ...grpc.CallOption) (*RequestSignUpTokenResponse, error)
 	SignUp(ctx context.Context, in *SignUpRequest, opts ...grpc.CallOption) (*SignUpResponse, error)
 	CanWriteCourse(ctx context.Context, in *CanWriteCourseRequest, opts ...grpc.CallOption) (*CanWriteCourseResponse, error)
+	GithubLogin(ctx context.Context, in *GithubLoginRequest, opts ...grpc.CallOption) (*GithubLoginResponse, error)
+	GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*GetUserResponse, error)
+	BindGithub(ctx context.Context, in *BindGithubRequest, opts ...grpc.CallOption) (*BindGithubResponse, error)
+	UnbindGithub(ctx context.Context, in *UnbindGithubRequest, opts ...grpc.CallOption) (*UnbindGithubResponse, error)
+	UpdateUser(ctx context.Context, in *UpdateUserRequest, opts ...grpc.CallOption) (*UpdateUserResponse, error)
+	UpdatePassword(ctx context.Context, in *UpdatePasswordRequest, opts ...grpc.CallOption) (*UpdatePasswordResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -345,6 +351,60 @@ func (c *autograderServiceClient) CanWriteCourse(ctx context.Context, in *CanWri
 	return out, nil
 }
 
+func (c *autograderServiceClient) GithubLogin(ctx context.Context, in *GithubLoginRequest, opts ...grpc.CallOption) (*GithubLoginResponse, error) {
+	out := new(GithubLoginResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GithubLogin", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*GetUserResponse, error) {
+	out := new(GetUserResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GetUser", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) BindGithub(ctx context.Context, in *BindGithubRequest, opts ...grpc.CallOption) (*BindGithubResponse, error) {
+	out := new(BindGithubResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/BindGithub", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) UnbindGithub(ctx context.Context, in *UnbindGithubRequest, opts ...grpc.CallOption) (*UnbindGithubResponse, error) {
+	out := new(UnbindGithubResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/UnbindGithub", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) UpdateUser(ctx context.Context, in *UpdateUserRequest, opts ...grpc.CallOption) (*UpdateUserResponse, error) {
+	out := new(UpdateUserResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/UpdateUser", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) UpdatePassword(ctx context.Context, in *UpdatePasswordRequest, opts ...grpc.CallOption) (*UpdatePasswordResponse, error) {
+	out := new(UpdatePasswordResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/UpdatePassword", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -378,6 +438,12 @@ type AutograderServiceServer interface {
 	RequestSignUpToken(context.Context, *RequestSignUpTokenRequest) (*RequestSignUpTokenResponse, error)
 	SignUp(context.Context, *SignUpRequest) (*SignUpResponse, error)
 	CanWriteCourse(context.Context, *CanWriteCourseRequest) (*CanWriteCourseResponse, error)
+	GithubLogin(context.Context, *GithubLoginRequest) (*GithubLoginResponse, error)
+	GetUser(context.Context, *GetUserRequest) (*GetUserResponse, error)
+	BindGithub(context.Context, *BindGithubRequest) (*BindGithubResponse, error)
+	UnbindGithub(context.Context, *UnbindGithubRequest) (*UnbindGithubResponse, error)
+	UpdateUser(context.Context, *UpdateUserRequest) (*UpdateUserResponse, error)
+	UpdatePassword(context.Context, *UpdatePasswordRequest) (*UpdatePasswordResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -471,6 +537,24 @@ func (UnimplementedAutograderServiceServer) SignUp(context.Context, *SignUpReque
 }
 func (UnimplementedAutograderServiceServer) CanWriteCourse(context.Context, *CanWriteCourseRequest) (*CanWriteCourseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CanWriteCourse not implemented")
+}
+func (UnimplementedAutograderServiceServer) GithubLogin(context.Context, *GithubLoginRequest) (*GithubLoginResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GithubLogin not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetUser(context.Context, *GetUserRequest) (*GetUserResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetUser not implemented")
+}
+func (UnimplementedAutograderServiceServer) BindGithub(context.Context, *BindGithubRequest) (*BindGithubResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BindGithub not implemented")
+}
+func (UnimplementedAutograderServiceServer) UnbindGithub(context.Context, *UnbindGithubRequest) (*UnbindGithubResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UnbindGithub not implemented")
+}
+func (UnimplementedAutograderServiceServer) UpdateUser(context.Context, *UpdateUserRequest) (*UpdateUserResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateUser not implemented")
+}
+func (UnimplementedAutograderServiceServer) UpdatePassword(context.Context, *UpdatePasswordRequest) (*UpdatePasswordResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdatePassword not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1010,6 +1094,114 @@ func _AutograderService_CanWriteCourse_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_GithubLogin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GithubLoginRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GithubLogin(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GithubLogin",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GithubLogin(ctx, req.(*GithubLoginRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_GetUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GetUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GetUser",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GetUser(ctx, req.(*GetUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_BindGithub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BindGithubRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).BindGithub(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/BindGithub",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).BindGithub(ctx, req.(*BindGithubRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_UnbindGithub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnbindGithubRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).UnbindGithub(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/UnbindGithub",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).UnbindGithub(ctx, req.(*UnbindGithubRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_UpdateUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).UpdateUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/UpdateUser",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).UpdateUser(ctx, req.(*UpdateUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_UpdatePassword_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdatePasswordRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).UpdatePassword(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/UpdatePassword",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).UpdatePassword(ctx, req.(*UpdatePasswordRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1128,6 +1320,30 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CanWriteCourse",
 			Handler:    _AutograderService_CanWriteCourse_Handler,
+		},
+		{
+			MethodName: "GithubLogin",
+			Handler:    _AutograderService_GithubLogin_Handler,
+		},
+		{
+			MethodName: "GetUser",
+			Handler:    _AutograderService_GetUser_Handler,
+		},
+		{
+			MethodName: "BindGithub",
+			Handler:    _AutograderService_BindGithub_Handler,
+		},
+		{
+			MethodName: "UnbindGithub",
+			Handler:    _AutograderService_UnbindGithub_Handler,
+		},
+		{
+			MethodName: "UpdateUser",
+			Handler:    _AutograderService_UpdateUser_Handler,
+		},
+		{
+			MethodName: "UpdatePassword",
+			Handler:    _AutograderService_UpdatePassword_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

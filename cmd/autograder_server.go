@@ -19,13 +19,16 @@ import (
 	"github.com/kataras/hcaptcha"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/github"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
 	"io/fs"
 	"math/rand"
 	"net/http"
-	"os"
+	"strings"
 	"time"
 )
 
@@ -33,16 +36,38 @@ var (
 	zapLogger *zap.Logger
 )
 
+func readConfig() {
+	viper.SetConfigName("config")
+	viper.SetConfigType("toml")
+	viper.AddConfigPath("/etc/autograder-server/")  // path to look for the config file in
+	viper.AddConfigPath("$HOME/.autograder-server") // call multiple times to add many search paths
+	viper.AddConfigPath(".")
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	err := viper.ReadInConfig()
+	if err != nil {
+		panic(err)
+	}
+}
+
 func main() {
 	var err error
 	rand.Seed(time.Now().UnixNano())
+	readConfig()
 	ls := &storage.LocalStorage{}
-	m := mailer.NewSMTPMailer(os.Getenv("SMTP_ADDR"), os.Getenv("SMTP_USER"), os.Getenv("SMTP_PASS"))
+	m := mailer.NewSMTPMailer(viper.GetString("smtp-addr"), viper.GetString("smtp-user"), viper.GetString("smtp-pass"))
 	distFS, err := fs.Sub(web.WebResources, "dist")
 	if err != nil {
 		panic(err)
 	}
-	hcaptchaClient := hcaptcha.New(os.Getenv("HCAPTCHA_SECRET"))
+	hcaptchaClient := hcaptcha.New(viper.GetString("hcaptcha-secret"))
+	hcaptchaClient.HTTPClient.Timeout = 30 * time.Second
+	githubOauth2Config := &oauth2.Config{
+		ClientID:     viper.GetString("github-client-id"),
+		ClientSecret: viper.GetString("github-client-secret"),
+		Scopes:       []string{"user:email", "read:user"},
+		Endpoint:     github.Endpoint,
+	}
 	corsHandler := cors.New(cors.Options{
 		AllowOriginFunc: func(origin string) bool {
 			return true
@@ -76,7 +101,7 @@ func main() {
 			grpc_recovery.StreamServerInterceptor(),
 		),
 	)
-	autograderService := autograder_grpc.NewAutograderServiceServer(ls, m, hcaptchaClient)
+	autograderService := autograder_grpc.NewAutograderServiceServer(ls, m, hcaptchaClient, githubOauth2Config)
 	autograder_pb.RegisterAutograderServiceServer(grpcServer, autograderService)
 	wrappedGrpc := grpcweb.WrapServer(grpcServer, grpcweb.WithOriginFunc(func(origin string) bool {
 		return true
@@ -84,7 +109,7 @@ func main() {
 		return true
 	}))
 	router := chi.NewRouter()
-	router.Use(chiMiddleware.Logger, chiMiddleware.Recoverer, middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler)
+	router.Use(chiMiddleware.RealIP, chiMiddleware.Logger, chiMiddleware.Recoverer, middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler)
 	router.Get("/metrics", promhttp.Handler().ServeHTTP)
 	router.Options("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP)
 	router.Post("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileUpload)).ServeHTTP)
@@ -92,13 +117,13 @@ func main() {
 	fsrv := http.FileServer(http.FS(distFS))
 
 	router.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := r.RequestURI
-		if len(r.RequestURI) > 1 {
-			p = r.RequestURI[1:]
+		p := r.URL.Path
+		if len(r.URL.Path) > 1 {
+			p = r.URL.Path[1:]
 		}
 		_, err := distFS.Open(p)
 		if err != nil {
-			http.StripPrefix(r.RequestURI, fsrv).ServeHTTP(w, r)
+			http.StripPrefix(r.URL.Path, fsrv).ServeHTTP(w, r)
 		} else {
 			fsrv.ServeHTTP(w, r)
 		}

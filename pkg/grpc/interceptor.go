@@ -186,6 +186,22 @@ func (a *AutograderService) RequireSubmissionRead(ctx context.Context, req inter
 	return nil, status.Error(codes.PermissionDenied, "SUBMISSION_UNAUTHORIZED")
 }
 
+func (a *AutograderService) NotAfterDueDate(ctx context.Context, req interface{}) (context.Context, error) {
+	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
+	if member.GetRole() == model_pb.CourseRole_Instructor || member.GetRole() == model_pb.CourseRole_TA {
+		return ctx, nil
+	}
+	assignment := ctx.Value(assignmentCtxKey{}).(*model_pb.Assignment)
+	now := time.Now()
+	if now.After(assignment.GetDueDate().AsTime()) {
+		return ctx, status.Error(codes.PermissionDenied, "AFTER_DUE_DATE")
+	}
+	if now.Before(assignment.GetReleaseDate().AsTime()) {
+		return ctx, status.Error(codes.PermissionDenied, "BEFORE_RELEASE_DATE")
+	}
+	return ctx, nil
+}
+
 func (a *AutograderService) initAuthFuncs() {
 	a.authFuncs = map[string][]MethodAuthFunc{}
 	authMaps := []struct {
@@ -198,6 +214,7 @@ func (a *AutograderService) initAuthFuncs() {
 				"SignUp",
 				"SubscribeSubmission",
 				"ResetPassword",
+				"GithubLogin",
 			},
 			AuthFuncs: []MethodAuthFunc{a.NoopAuth},
 		},
@@ -211,10 +228,15 @@ func (a *AutograderService) initAuthFuncs() {
 		{
 			Methods: []string{
 				"GetCourseList",
-				"CreateManifest",
 				"InitUpload",
 				"CreateCourse",
 				"DeleteFileInManifest",
+				"GetUser",
+				"UpdateBasicInfo",
+				"BindGithub",
+				"UnbindGithub",
+				"UpdateUser",
+				"UpdatePassword",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin},
 		},
@@ -223,12 +245,18 @@ func (a *AutograderService) initAuthFuncs() {
 				"GetAssignment",
 				"GetAssignmentsInCourse",
 				"GetSubmissionsInAssignment",
-				"CreateSubmission",
 				"GetLeaderboard",
 				"HasLeaderboard",
 				"GetCourse",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse},
+		},
+		{
+			Methods: []string{
+				"CreateSubmission",
+				"CreateManifest",
+			},
+			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.NotAfterDueDate},
 		},
 		{
 
