@@ -20,6 +20,14 @@ func (ls *LocalStorage) Open(ctx context.Context, path string) (io.ReadCloser, e
 	return os.Open(path)
 }
 
+func (ls *LocalStorage) Size(ctx context.Context, path string) (int64, error) {
+	s, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return s.Size(), nil
+}
+
 func (ls *LocalStorage) Put(ctx context.Context, path string, r io.ReadSeeker) error {
 	cwd, err := os.Getwd()
 	if err != nil {

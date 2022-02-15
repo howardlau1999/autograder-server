@@ -282,6 +282,7 @@ message InitDownloadResponse {
   string token = 1;
   DownloadFileType file_type = 2;
   string filename = 3;
+  int64 filesize = 4;
 }
 
 message GetCourseMembersRequest {

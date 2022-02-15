@@ -420,6 +420,10 @@ func (a *AutograderService) InitDownload(ctx context.Context, request *autograde
 		return nil, status.Error(codes.Internal, "OPEN_FILE")
 	}
 	defer file.Close()
+	size, err := a.ls.Size(ctx, realpath)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "FILE_SIZE")
+	}
 	head := make([]byte, 512)
 	file.Read(head)
 	fileType := http.DetectContentType(head)
@@ -436,7 +440,7 @@ func (a *AutograderService) InitDownload(ctx context.Context, request *autograde
 	if err != nil {
 		return nil, status.Error(codes.Internal, "SIGN_JWT")
 	}
-	resp := &autograder_pb.InitDownloadResponse{FileType: fileTypePB, Token: ss, Filename: fn}
+	resp := &autograder_pb.InitDownloadResponse{FileType: fileTypePB, Token: ss, Filename: fn, Filesize: size}
 	return resp, nil
 
 }
@@ -1135,7 +1139,8 @@ func (a *AutograderService) GithubLogin(ctx context.Context, request *autograder
 
 	user, userId, err = a.userRepo.GetUserByEmail(ctx, email)
 	if user != nil {
-		if user.GetGithubId() != login {
+		oldGithubId := user.GetGithubId()
+		if oldGithubId != "" && oldGithubId != login {
 			return nil, status.Error(codes.AlreadyExists, "EMAIL_DIFFERENT")
 		}
 		if err := a.userRepo.BindGithubId(ctx, userId, login); err != nil {
@@ -1149,7 +1154,8 @@ func (a *AutograderService) GithubLogin(ctx context.Context, request *autograder
 
 	user, userId, err = a.userRepo.GetUserByUsername(ctx, login)
 	if user != nil {
-		if user.GetGithubId() != login {
+		oldGithubId := user.GetGithubId()
+		if oldGithubId != "" && oldGithubId != login {
 			return nil, status.Error(codes.AlreadyExists, "USERNAME_DIFFERENT")
 		}
 		if err := a.userRepo.BindGithubId(ctx, userId, login); err != nil {
