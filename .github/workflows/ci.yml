@@ -32,7 +32,9 @@ jobs:
       - if: steps.cache-web.outputs.cache-hit != 'true'
         run: npm install -g @angular/cli && cd web && npm install && ng build --output-path ../pkg/web/dist
       - run: zip -r autograder-web.zip pkg/web/dist
+        if: steps.cache-web.outputs.cache-hit != 'true'
       - uses: appleboy/scp-action@master
+        if: steps.cache-web.outputs.cache-hit != 'true'
         with:
           host: ${{ secrets.ALIYUN_HOST }}
           username: ${{ secrets.ALIYUN_USERNAME }}
