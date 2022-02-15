@@ -17,7 +17,7 @@ jobs:
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
-      - run: cd web && git rev-parse > ../.web-version
+      - run: cd web && git rev-parse HEAD > ../.web-version
       - uses: actions/cache@v2
         with:
           path: web/.angular
@@ -58,7 +58,7 @@ jobs:
       - uses: actions/setup-go@v2
         with:
           go-version: '^1.17'
-      - run: cd web && git rev-parse > ../.web-version
+      - run: cd web && git rev-parse HEAD > ../.web-version
       - uses: actions/cache@v2
         with:
           path: pkg/web/dist
