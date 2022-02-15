@@ -26,6 +26,8 @@ jobs:
         with:
           path: web/.angular
           key: autograder-angular-${{ hashFiles('.web-version') }}
+          restore-keys: |
+            autograder-angular-
       - run: npm install -g @angular/cli
       - run: cd web && npm install
       - run: cd web && ng build --output-path ../pkg/web/dist
