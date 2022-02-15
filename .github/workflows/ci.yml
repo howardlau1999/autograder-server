@@ -55,10 +55,12 @@ jobs:
             ext: .exe
     steps:
       - uses: actions/checkout@v2
-      - run: cd web && git rev-parse HEAD | tee ../.web-version
+        with:
+          submodules: 'recursive'
       - uses: actions/setup-go@v2
         with:
           go-version: '^1.17'
+      - run: cd web && git rev-parse HEAD | tee ../.web-version
       - uses: actions/cache@v2
         with:
           path: pkg/web/dist
