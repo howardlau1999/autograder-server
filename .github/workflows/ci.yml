@@ -17,14 +17,15 @@ jobs:
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
+      - uses: actions/cache@v2
+        with:
+          path: |
+            pkg/web/dist
+          key: autograder-web-${{ github.sha }}
       - run: npm install -g @angular/cli
       - run: cd web && npm install
       - run: cd web && ng build --output-path ../pkg/web/dist
-      - uses: actions/upload-artifact@v2
-        with:
-          name: autograder-web
-          path: |
-            pkg/web/dist
+
   build-server:
     runs-on: ubuntu-latest
     needs: build-web
@@ -39,15 +40,21 @@ jobs:
       - uses: actions/setup-go@v2
         with:
           go-version: '^1.17'
-      - uses: actions/download-artifact@v2
+      - uses: actions/cache@v2
         with:
-          name: autograder-web
-          path: pkg/web/dist
+          path: |
+            pkg/web/dist
+          key: autograder-web-${{ github.sha }}
       - run: CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} go build -tags containers_image_openpgp -ldflags '-w -extldflags "-static"' -o autograder-server-${{ matrix.GOOS }}${{ matrix.ext }} cmd/autograder_server.go
       - run: CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} go build -tags containers_image_openpgp -ldflags '-w -extldflags "-static"' -o db-seeder-${{ matrix.GOOS }}${{ matrix.ext }} cmd/db_seeder.go
-      - uses: actions/upload-artifact@v2
+      - run: zip autograder-server-${{ matrix.GOOS }}.zip autograder-server-${{ matrix.GOOS }}${{ matrix.ext }} db-seeder-${{ matrix.GOOS }}${{ matrix.ext }}
+      - uses: appleboy@scp-action@master
         with:
-          name: autograder-server-${{ matrix.GOOS }}
-          path: |
-            autograder-server-${{ matrix.GOOS }}${{ matrix.ext }}
-            db-seeder-${{ matrix.GOOS }}${{ matrix.ext }}
+          host: ${{ secrets.ALIYUN_HOST }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          key: ${{ secrets.ALIYUN_PRIVATE_KEY }}
+          passphrase: ${{ secrets.ALIYUN_PRIVATE_KEY_PASS }}
+          source: autograder-server-${{ matrix.GOOS }}.zip
+          target: autograder-server-${{ matrix.GOOS }}.zip
+          overwrite: true
+
