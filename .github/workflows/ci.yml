@@ -20,17 +20,17 @@ jobs:
       - run: cd web && git rev-parse > ../.web-version
       - uses: actions/cache@v2
         with:
-          path: pkg/web/dist
-          key: autograder-web-${{ hashFiles('.web-version') }}
-      - uses: actions/cache@v2
-        with:
           path: web/.angular
           key: autograder-angular-${{ hashFiles('.web-version') }}
           restore-keys: |
             autograder-angular-
-      - run: npm install -g @angular/cli
-      - run: cd web && npm install
-      - run: cd web && ng build --output-path ../pkg/web/dist
+      - uses: actions/cache@v2
+        id: cache-web
+        with:
+          path: pkg/web/dist
+          key: autograder-web-${{ hashFiles('.web-version') }}
+      - if: steps.cache-web.outputs.cache-hit != 'true'
+        run: npm install -g @angular/cli && cd web && npm install && ng build --output-path ../pkg/web/dist
       - run: zip -r autograder-web.zip pkg/web/dist
       - uses: appleboy/scp-action@master
         with:
