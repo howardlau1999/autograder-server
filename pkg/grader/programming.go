@@ -29,6 +29,15 @@ type DockerProgrammingGrader struct {
 	srr repository.SubmissionReportRepository
 }
 
+func truncateOutput(output string, maxLen int, prompt string) string {
+	outputLen := len(output)
+	if outputLen <= maxLen {
+		return output
+	}
+	halfLen := (maxLen - len(prompt)) / 2
+	return output[:halfLen] + prompt + output[outputLen-halfLen:]
+}
+
 func (d *DockerProgrammingGrader) PullImage(image string) error {
 	closer, err := d.cli.ImagePull(context.Background(), image, types.ImagePullOptions{})
 	if err != nil {
@@ -170,6 +179,7 @@ func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submissio
 			for _, testcase := range resultsPB.Tests {
 				score += testcase.Score
 				maxScore += testcase.MaxScore
+				testcase.Output = truncateOutput(testcase.Output, 50*1024, "\n...truncated...\n")
 			}
 			resultsPB.Score = score
 			resultsPB.MaxScore = maxScore
