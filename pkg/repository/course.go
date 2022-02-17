@@ -66,6 +66,10 @@ func (cr *KVCourseRepository) getIdKey(id uint64) []byte {
 	return []byte(fmt.Sprintf("course:id:%d", id))
 }
 
+func (cr *KVCourseRepository) getJoinCodeKey(joinCode string) []byte {
+	return []byte(fmt.Sprintf("course:join_code:%s", joinCode))
+}
+
 func (cr *KVCourseRepository) getUserPrefix(courseId uint64) []byte {
 	return []byte(fmt.Sprintf("course:users:%d:", courseId))
 }

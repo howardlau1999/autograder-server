@@ -8,6 +8,7 @@ import (
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/repository"
 	"autograder-server/pkg/storage"
+	"autograder-server/pkg/utils"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -271,13 +272,16 @@ func (a *AutograderService) UpdateCourseMember(ctx context.Context, request *aut
 
 func (a *AutograderService) UpdateCourse(ctx context.Context, request *autograder_pb.UpdateCourseRequest) (*autograder_pb.UpdateCourseResponse, error) {
 	courseId := request.GetCourseId()
-	course := request.GetCourse()
+
 	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId))
 	l.Debug("UpdateCourse")
-	_, err := a.courseRepo.GetCourse(ctx, courseId)
+	course, err := a.courseRepo.GetCourse(ctx, courseId)
 	if err != nil {
 		return nil, status.Error(codes.NotFound, "INVALID_COURSE_ID")
 	}
+	course.Description = request.GetDescription()
+	course.Name = request.GetName()
+	course.ShortName = request.GetShortName()
 	err = a.courseRepo.UpdateCourse(ctx, courseId, course)
 	if err != nil {
 		l.Error("UpdateCourse.UpdateCourse", zap.Error(err))
@@ -398,11 +402,13 @@ func (a *AutograderService) GetCourseMembers(ctx context.Context, request *autog
 			l.Error("GetCourseMembers.GetUserById", zap.Uint64("userId", userId), zap.Error(err))
 		}
 		respMembers = append(respMembers, &autograder_pb.GetCourseMembersResponse_MemberInfo{
-			Username: user.GetUsername(),
-			UserId:   userId,
-			Role:     member.GetRole(),
-			Email:    user.GetEmail(),
-			Nickname: user.GetNickname(),
+			Username:  user.GetUsername(),
+			UserId:    userId,
+			Role:      member.GetRole(),
+			Email:     user.GetEmail(),
+			Nickname:  user.GetNickname(),
+			StudentId: user.GetStudentId(),
+			GithubId:  user.GetGithubId(),
 		})
 	}
 	resp.Members = respMembers
@@ -628,6 +634,9 @@ func (a *AutograderService) GetFilesInSubmission(ctx context.Context, request *a
 func (a *AutograderService) GetCourse(ctx context.Context, request *autograder_pb.GetCourseRequest) (*autograder_pb.GetCourseResponse, error) {
 	course, err := a.courseRepo.GetCourse(ctx, request.GetCourseId())
 	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
+	if member.GetRole() != model_pb.CourseRole_TA && member.GetRole() != model_pb.CourseRole_Instructor {
+		course.JoinCode = ""
+	}
 	resp := &autograder_pb.GetCourseResponse{Course: course, Role: member.GetRole()}
 	return resp, err
 }
@@ -932,7 +941,7 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 	if user == nil || err != nil || bcrypt.CompareHashAndPassword(user.GetPassword(), []byte(password)) != nil {
 		return nil, status.Error(codes.InvalidArgument, "WRONG_PASSWORD")
 	}
-	if err := a.signLoginToken(ctx, id, username, user.Nickname); err != nil {
+	if err := a.signLoginToken(ctx, id, user.Username, user.Nickname); err != nil {
 		return nil, err
 	}
 	response := &autograder_pb.LoginResponse{
@@ -1303,6 +1312,70 @@ func (a *AutograderService) UpdatePassword(ctx context.Context, request *autogra
 		return &autograder_pb.UpdatePasswordResponse{Success: false}, nil
 	}
 	return &autograder_pb.UpdatePasswordResponse{Success: true}, nil
+}
+
+func (a *AutograderService) JoinCourse(ctx context.Context, request *autograder_pb.JoinCourseRequest) (*autograder_pb.JoinCourseResponse, error) {
+	courseId := utils.Base30Decode(request.GetJoinCode())
+	course, err := a.courseRepo.GetCourse(ctx, courseId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_COURSE_ID")
+	}
+	if !course.AllowsJoin || course.GetJoinCode() != request.GetJoinCode() {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_JOIN_CODE")
+	}
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	userId := user.GetUserId()
+	member := a.userRepo.GetCourseMember(ctx, userId, courseId)
+	if member != nil {
+		return nil, status.Error(codes.AlreadyExists, "ALREADY_IN_COURSE")
+	}
+	newMember := &model_pb.CourseMember{
+		CourseId: courseId,
+		UserId:   userId,
+		Role:     model_pb.CourseRole_Student,
+	}
+	err = a.userRepo.AddCourse(ctx, newMember)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "ADD_COURSE")
+	}
+	err = a.courseRepo.AddUser(ctx, newMember)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "ADD_USER")
+	}
+	return &autograder_pb.JoinCourseResponse{CourseId: courseId}, nil
+}
+
+func (a *AutograderService) GenerateJoinCode(ctx context.Context, request *autograder_pb.GenerateJoinCodeRequest) (*autograder_pb.GenerateJoinCodeResponse, error) {
+	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", request.GetCourseId()))
+	code := utils.Base30Encode(request.GetCourseId())
+	course, err := a.courseRepo.GetCourse(ctx, request.GetCourseId())
+	if err != nil {
+		l.Error("GenerateJoinCode.GetCourse", zap.Error(err))
+		return nil, status.Error(codes.Internal, "GET_COURSE")
+	}
+	course.JoinCode = code
+	err = a.courseRepo.UpdateCourse(ctx, request.GetCourseId(), course)
+	if err != nil {
+		l.Error("GenerateJoinCode.UpdateCourse", zap.Error(err))
+		return nil, status.Error(codes.Internal, "UPDATE_COURSE")
+	}
+	return &autograder_pb.GenerateJoinCodeResponse{JoinCode: code}, nil
+}
+
+func (a *AutograderService) ChangeAllowsJoinCourse(ctx context.Context, request *autograder_pb.ChangeAllowsJoinCourseRequest) (*autograder_pb.ChangeAllowsJoinCourseResponse, error) {
+	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", request.GetCourseId()))
+	course, err := a.courseRepo.GetCourse(ctx, request.GetCourseId())
+	if err != nil {
+		l.Error("GenerateJoinCode.GetCourse", zap.Error(err))
+		return nil, status.Error(codes.Internal, "GET_COURSE")
+	}
+	course.AllowsJoin = request.GetAllowsJoin()
+	err = a.courseRepo.UpdateCourse(ctx, request.GetCourseId(), course)
+	if err != nil {
+		l.Error("GenerateJoinCode.UpdateCourse", zap.Error(err))
+		return nil, status.Error(codes.Internal, "UPDATE_COURSE")
+	}
+	return &autograder_pb.ChangeAllowsJoinCourseResponse{AllowsJoin: course.AllowsJoin}, nil
 }
 
 func NewAutograderServiceServer(db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client, ghOauth2Config *oauth2.Config) *AutograderService {

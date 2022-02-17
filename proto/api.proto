@@ -298,6 +298,8 @@ message GetCourseMembersResponse {
     string email = 3;
     string nickname = 4;
     CourseRole role = 5;
+    string github_id = 6;
+    string student_id = 7;
   }
   repeated MemberInfo members = 1;
 }
@@ -336,7 +338,9 @@ message UpdateCourseMemberResponse {
 
 message UpdateCourseRequest {
   uint64 course_id = 1;
-  Course course = 2;
+  string name = 2;
+  string short_name = 3;
+  string description = 4;
 }
 
 message UpdateCourseResponse {
@@ -451,6 +455,31 @@ message UpdatePasswordResponse {
   bool success = 1;
 }
 
+message JoinCourseRequest {
+  string join_code = 1;
+}
+
+message JoinCourseResponse {
+  uint64 course_id = 1;
+}
+
+message GenerateJoinCodeRequest {
+  uint64 course_id = 1;
+}
+
+message GenerateJoinCodeResponse {
+  string join_code = 1;
+}
+
+message ChangeAllowsJoinCourseRequest {
+  uint64 course_id = 1;
+  bool allows_join = 2;
+}
+
+message ChangeAllowsJoinCourseResponse {
+  bool allows_join = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -487,4 +516,7 @@ service AutograderService {
    rpc UnbindGithub(UnbindGithubRequest) returns (UnbindGithubResponse);
    rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
    rpc UpdatePassword(UpdatePasswordRequest) returns (UpdatePasswordResponse);
+   rpc JoinCourse(JoinCourseRequest) returns (JoinCourseResponse);
+   rpc GenerateJoinCode(GenerateJoinCodeRequest) returns (GenerateJoinCodeResponse);
+   rpc ChangeAllowsJoinCourse(ChangeAllowsJoinCourseRequest) returns (ChangeAllowsJoinCourseResponse);
 }

@@ -46,6 +46,8 @@ message Course {
   string short_name = 2;
   string term = 3;
   string description = 4;
+  string join_code = 5;
+  bool allows_join = 6;
 }
 
 message RubricItem {

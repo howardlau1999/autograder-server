@@ -57,6 +57,9 @@ type AutograderServiceClient interface {
 	UnbindGithub(ctx context.Context, in *UnbindGithubRequest, opts ...grpc.CallOption) (*UnbindGithubResponse, error)
 	UpdateUser(ctx context.Context, in *UpdateUserRequest, opts ...grpc.CallOption) (*UpdateUserResponse, error)
 	UpdatePassword(ctx context.Context, in *UpdatePasswordRequest, opts ...grpc.CallOption) (*UpdatePasswordResponse, error)
+	JoinCourse(ctx context.Context, in *JoinCourseRequest, opts ...grpc.CallOption) (*JoinCourseResponse, error)
+	GenerateJoinCode(ctx context.Context, in *GenerateJoinCodeRequest, opts ...grpc.CallOption) (*GenerateJoinCodeResponse, error)
+	ChangeAllowsJoinCourse(ctx context.Context, in *ChangeAllowsJoinCourseRequest, opts ...grpc.CallOption) (*ChangeAllowsJoinCourseResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -405,6 +408,33 @@ func (c *autograderServiceClient) UpdatePassword(ctx context.Context, in *Update
 	return out, nil
 }
 
+func (c *autograderServiceClient) JoinCourse(ctx context.Context, in *JoinCourseRequest, opts ...grpc.CallOption) (*JoinCourseResponse, error) {
+	out := new(JoinCourseResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/JoinCourse", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) GenerateJoinCode(ctx context.Context, in *GenerateJoinCodeRequest, opts ...grpc.CallOption) (*GenerateJoinCodeResponse, error) {
+	out := new(GenerateJoinCodeResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GenerateJoinCode", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) ChangeAllowsJoinCourse(ctx context.Context, in *ChangeAllowsJoinCourseRequest, opts ...grpc.CallOption) (*ChangeAllowsJoinCourseResponse, error) {
+	out := new(ChangeAllowsJoinCourseResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/ChangeAllowsJoinCourse", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -444,6 +474,9 @@ type AutograderServiceServer interface {
 	UnbindGithub(context.Context, *UnbindGithubRequest) (*UnbindGithubResponse, error)
 	UpdateUser(context.Context, *UpdateUserRequest) (*UpdateUserResponse, error)
 	UpdatePassword(context.Context, *UpdatePasswordRequest) (*UpdatePasswordResponse, error)
+	JoinCourse(context.Context, *JoinCourseRequest) (*JoinCourseResponse, error)
+	GenerateJoinCode(context.Context, *GenerateJoinCodeRequest) (*GenerateJoinCodeResponse, error)
+	ChangeAllowsJoinCourse(context.Context, *ChangeAllowsJoinCourseRequest) (*ChangeAllowsJoinCourseResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -555,6 +588,15 @@ func (UnimplementedAutograderServiceServer) UpdateUser(context.Context, *UpdateU
 }
 func (UnimplementedAutograderServiceServer) UpdatePassword(context.Context, *UpdatePasswordRequest) (*UpdatePasswordResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdatePassword not implemented")
+}
+func (UnimplementedAutograderServiceServer) JoinCourse(context.Context, *JoinCourseRequest) (*JoinCourseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method JoinCourse not implemented")
+}
+func (UnimplementedAutograderServiceServer) GenerateJoinCode(context.Context, *GenerateJoinCodeRequest) (*GenerateJoinCodeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GenerateJoinCode not implemented")
+}
+func (UnimplementedAutograderServiceServer) ChangeAllowsJoinCourse(context.Context, *ChangeAllowsJoinCourseRequest) (*ChangeAllowsJoinCourseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ChangeAllowsJoinCourse not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1202,6 +1244,60 @@ func _AutograderService_UpdatePassword_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_JoinCourse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(JoinCourseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).JoinCourse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/JoinCourse",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).JoinCourse(ctx, req.(*JoinCourseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_GenerateJoinCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GenerateJoinCodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GenerateJoinCode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GenerateJoinCode",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GenerateJoinCode(ctx, req.(*GenerateJoinCodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_ChangeAllowsJoinCourse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChangeAllowsJoinCourseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).ChangeAllowsJoinCourse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/ChangeAllowsJoinCourse",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).ChangeAllowsJoinCourse(ctx, req.(*ChangeAllowsJoinCourseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1344,6 +1440,18 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdatePassword",
 			Handler:    _AutograderService_UpdatePassword_Handler,
+		},
+		{
+			MethodName: "JoinCourse",
+			Handler:    _AutograderService_JoinCourse_Handler,
+		},
+		{
+			MethodName: "GenerateJoinCode",
+			Handler:    _AutograderService_GenerateJoinCode_Handler,
+		},
+		{
+			MethodName: "ChangeAllowsJoinCourse",
+			Handler:    _AutograderService_ChangeAllowsJoinCourse_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
