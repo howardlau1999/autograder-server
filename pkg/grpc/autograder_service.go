@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"archive/zip"
 	autograder_pb "autograder-server/pkg/api/proto"
 	"autograder-server/pkg/grader"
 	"autograder-server/pkg/mailer"
@@ -29,6 +30,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"io"
 	"math/rand"
 	"net/http"
 	"net/mail"
@@ -408,11 +410,21 @@ func (a *AutograderService) GetCourseMembers(ctx context.Context, request *autog
 }
 
 func (a *AutograderService) InitDownload(ctx context.Context, request *autograder_pb.InitDownloadRequest) (*autograder_pb.InitDownloadResponse, error) {
+	sub := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
+	if request.GetIsDirectory() {
+		fn := fmt.Sprintf("submission_%d.zip", request.GetSubmissionId())
+		payloadPB := &autograder_pb.DownloadTokenPayload{RealPath: sub.GetPath(), Filename: fn, IsDirectory: true}
+		ss, err := a.signPayloadToken(DownloadJWTSignKey, payloadPB, time.Now().Add(1*time.Minute))
+		if err != nil {
+			return nil, status.Error(codes.Internal, "SIGN_JWT")
+		}
+		resp := &autograder_pb.InitDownloadResponse{Token: ss, Filename: fn}
+		return resp, nil
+	}
 	filename := request.GetFilename()
 	if isFilenameInvalid(filename) {
 		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
 	}
-	sub := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	realpath := filepath.Join(sub.GetPath(), filename)
 	_, fn := path.Split(filename)
 	file, err := a.ls.Open(ctx, realpath)
@@ -442,7 +454,6 @@ func (a *AutograderService) InitDownload(ctx context.Context, request *autograde
 	}
 	resp := &autograder_pb.InitDownloadResponse{FileType: fileTypePB, Token: ss, Filename: fn, Filesize: size}
 	return resp, nil
-
 }
 
 func isFilenameInvalid(filename string) bool {
@@ -1023,11 +1034,49 @@ func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Re
 	}
 	var payloadPB autograder_pb.DownloadTokenPayload
 	err = proto.Unmarshal(payload, &payloadPB)
-	if err != nil || fn != payloadPB.GetFilename() {
-		w.WriteHeader(http.StatusBadRequest)
-		return
+	if !payloadPB.GetIsDirectory() {
+		if err != nil || fn != payloadPB.GetFilename() {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Add("Content-disposition", "attachment; filename="+fn)
+		http.ServeFile(w, r, payloadPB.GetRealPath())
+	} else {
+		w.Header().Add("Content-disposition", "attachment; filename="+fn)
+		zw := zip.NewWriter(w)
+		defer zw.Close()
+		prefix := payloadPB.GetRealPath()
+		walker := func(path string, info os.FileInfo, err error) error {
+			fmt.Printf("Crawling: %#v\n", path)
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			f, err := zw.Create(path[len(prefix):])
+			if err != nil {
+				return err
+			}
+
+			_, err = io.Copy(f, file)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		}
+		err = filepath.Walk(payloadPB.GetRealPath(), walker)
+		if err != nil {
+			grpclog.Errorf("failed to generate zip file: %v", err)
+		}
 	}
-	http.ServeFile(w, r, payloadPB.GetRealPath())
 }
 
 func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Request) {

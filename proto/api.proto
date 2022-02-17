@@ -156,6 +156,7 @@ message UserTokenPayload {
 message DownloadTokenPayload {
   string real_path = 1;
   string filename = 2;
+  bool is_directory = 3;
 }
 
 message GetSubmissionReportRequest {
@@ -269,6 +270,7 @@ message DeleteFileInManifestResponse {
 message InitDownloadRequest {
   uint64 submission_id = 1;
   string filename = 2;
+  bool is_directory = 3;
 }
 
 enum DownloadFileType {
