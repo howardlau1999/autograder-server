@@ -7,6 +7,7 @@ import (
 	"autograder-server/pkg/middleware"
 	"autograder-server/pkg/storage"
 	"autograder-server/pkg/web"
+	"bytes"
 	"github.com/go-chi/chi"
 	chiMiddleware "github.com/go-chi/chi/middleware"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
@@ -25,6 +26,8 @@ import (
 	"golang.org/x/oauth2/github"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
+	"html/template"
+	"io"
 	"io/fs"
 	"math/rand"
 	"net/http"
@@ -35,6 +38,12 @@ import (
 var (
 	zapLogger *zap.Logger
 )
+
+type ServerProvidedTokens struct {
+	ServerProvided  string
+	HcaptchaSiteKey string
+	GithubClientId  string
+}
 
 func readConfig() {
 	viper.SetConfigName("config")
@@ -68,6 +77,7 @@ func main() {
 		Scopes:       []string{"user:email", "read:user"},
 		Endpoint:     github.Endpoint,
 	}
+
 	corsHandler := cors.New(cors.Options{
 		AllowOriginFunc: func(origin string) bool {
 			return true
@@ -114,6 +124,20 @@ func main() {
 	router.Options("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP)
 	router.Post("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileUpload)).ServeHTTP)
 	router.Get("/AutograderService/FileDownload/{filename}", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileDownload)).ServeHTTP)
+	providedTokens := &ServerProvidedTokens{
+		ServerProvided:  "true",
+		HcaptchaSiteKey: viper.GetString("hcaptcha-site-key"),
+		GithubClientId:  viper.GetString("github-client-id"),
+	}
+	tmpl, err := template.ParseFS(distFS, "index.html")
+	var writeTemplate func(w http.ResponseWriter, r *http.Request)
+	if err == nil {
+		rendered := &bytes.Buffer{}
+		tmpl.Execute(rendered, providedTokens)
+		writeTemplate = func(w http.ResponseWriter, r *http.Request) {
+			io.Copy(w, rendered)
+		}
+	}
 	fsrv := http.FileServer(http.FS(distFS))
 
 	router.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +147,10 @@ func main() {
 		}
 		_, err := distFS.Open(p)
 		if err != nil {
+			if writeTemplate != nil {
+				writeTemplate(w, r)
+				return
+			}
 			http.StripPrefix(r.URL.Path, fsrv).ServeHTTP(w, r)
 		} else {
 			fsrv.ServeHTTP(w, r)
