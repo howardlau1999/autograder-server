@@ -1047,7 +1047,6 @@ func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Re
 		defer zw.Close()
 		prefix := payloadPB.GetRealPath()
 		walker := func(path string, info os.FileInfo, err error) error {
-			fmt.Printf("Crawling: %#v\n", path)
 			if err != nil {
 				return err
 			}
