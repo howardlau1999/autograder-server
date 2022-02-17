@@ -79,7 +79,7 @@ var EmailCodeValidDuration = 10 * time.Minute
 
 func (a *AutograderService) sendEmailCode(to string, subject string, code string, template string) error {
 	return a.mailer.SendMail(
-		viper.GetString("smtp-from"),
+		viper.GetString("smtp.from"),
 		[]string{to},
 		subject,
 		fmt.Sprintf(template, code),
@@ -1257,11 +1257,7 @@ func (a *AutograderService) UpdatePassword(ctx context.Context, request *autogra
 	return &autograder_pb.UpdatePasswordResponse{Success: true}, nil
 }
 
-func NewAutograderServiceServer(ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client, ghOauth2Config *oauth2.Config) *AutograderService {
-	db, err := pebble.Open("db", &pebble.Options{Merger: repository.NewKVMerger()})
-	if err != nil {
-		panic(err)
-	}
+func NewAutograderServiceServer(db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client, ghOauth2Config *oauth2.Config) *AutograderService {
 	srr := repository.NewKVSubmissionReportRepository(db)
 	a := &AutograderService{
 		manifestRepo:         repository.NewKVManifestRepository(db),
