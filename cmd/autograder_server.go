@@ -15,6 +15,7 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/go-chi/chi"
 	chiMiddleware "github.com/go-chi/chi/middleware"
+	"github.com/go-chi/httprate"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
 	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
@@ -72,6 +73,7 @@ const initialConfig = `
 
 const dbPath = "db"
 
+var initializeMarker = []byte("__autograder_initialized")
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 func RandStringRunes(n int) string {
@@ -83,12 +85,7 @@ func RandStringRunes(n int) string {
 }
 
 func dbInit(db *pebble.DB, email string) bool {
-	initializeMarker := []byte("__autograder_initialized")
-	_, closer, err := db.Get(initializeMarker)
-	if err == nil {
-		defer closer.Close()
-	}
-	if err != pebble.ErrNotFound {
+	if !isDatabaseUninitialized(db) {
 		log.Printf("Database is already initialized. If you want to initialize again please delete the database manually.")
 		return false
 	}
@@ -134,6 +131,14 @@ func readConfig() {
 	}
 }
 
+func isDatabaseUninitialized(db *pebble.DB) bool {
+	_, closer, err := db.Get(initializeMarker)
+	if err == nil {
+		defer closer.Close()
+	}
+	return err == pebble.ErrNotFound
+}
+
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	var isInit bool
@@ -176,6 +181,10 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+		return
+	}
+	if isDatabaseUninitialized(db) {
+		log.Printf("Database is not initialized. Please run autograder-server --init first.")
 		return
 	}
 	readConfig()
@@ -235,7 +244,13 @@ func main() {
 		return true
 	}))
 	router := chi.NewRouter()
-	router.Use(chiMiddleware.RealIP, chiMiddleware.Logger, chiMiddleware.Recoverer, middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler)
+	router.Use(
+		chiMiddleware.RealIP,
+		httprate.LimitByIP(100, 3*time.Second),
+		chiMiddleware.Logger,
+		chiMiddleware.Recoverer,
+		middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler,
+	)
 	router.Get("/metrics", promhttp.Handler().ServeHTTP)
 	router.Options("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP)
 	router.Post("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileUpload)).ServeHTTP)
