@@ -185,7 +185,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	hcaptchaClient := hcaptcha.New(viper.GetString("hcaptcha.secret"))
+	hcaptchaClient := hcaptcha.New(viper.GetString("hcaptcha.secret-key"))
 	hcaptchaClient.HTTPClient.Timeout = 30 * time.Second
 	githubOauth2Config := &oauth2.Config{
 		ClientID:     viper.GetString("github.client-id"),
