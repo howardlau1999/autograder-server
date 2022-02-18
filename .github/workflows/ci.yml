@@ -30,7 +30,7 @@ jobs:
           path: pkg/web/dist
           key: autograder-web-${{ hashFiles('.web-version') }}
       - if: steps.cache-web.outputs.cache-hit != 'true'
-        run: npm install -g @angular/cli && cd web && npm install && ng build --output-path ../pkg/web/dist
+        run: npm install -g @angular/cli && cd web && npm install && npm install vcd-stream --ignore-scripts && ng build --output-path ../pkg/web/dist
       - run: zip -r autograder-web.zip pkg/web/dist
         if: steps.cache-web.outputs.cache-hit != 'true'
       - uses: appleboy/scp-action@master
