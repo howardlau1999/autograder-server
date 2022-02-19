@@ -65,19 +65,20 @@ message GetSubmissionsInAssignmentRequest {
   uint64 assignment_id = 1;
 }
 
-message GetSubmissionsInAssignmentResponse {
-  message SubmissionInfo {
-    uint64 submission_id = 1;
-    google.protobuf.Timestamp submitted_at = 2;
-    message Submitter {
-      uint64 user_id = 1;
-      string username = 2;
-    }
-    repeated Submitter submitters = 3;
-    uint64 score = 4;
-    uint64 max_score = 5;
-    SubmissionStatus status = 6;
+message SubmissionInfo {
+  uint64 submission_id = 1;
+  google.protobuf.Timestamp submitted_at = 2;
+  message Submitter {
+    uint64 user_id = 1;
+    string username = 2;
   }
+  repeated Submitter submitters = 3;
+  uint64 score = 4;
+  uint64 max_score = 5;
+  SubmissionStatus status = 6;
+}
+
+message GetSubmissionsInAssignmentResponse {
   repeated SubmissionInfo submissions = 1;
 }
 
@@ -480,6 +481,30 @@ message ChangeAllowsJoinCourseResponse {
   bool allows_join = 1;
 }
 
+message InspectAllSubmissionsInAssignmentRequest {
+  uint64 assignment_id = 1;
+}
+
+message InspectAllSubmissionsInAssignmentResponse {
+  message UserSubmissionInfo {
+    uint64 user_id = 1;
+    string username = 2;
+    string nickname = 3;
+    string student_id = 4;
+    uint64 submission_count = 5;
+  }
+  repeated UserSubmissionInfo entries = 1;
+}
+
+message InspectUserSubmissionHistoryRequest {
+  uint64 assignment_id = 1;
+  uint64 user_id = 2;
+}
+
+message InspectUserSubmissionHistoryResponse {
+  repeated SubmissionInfo submissions = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -519,4 +544,6 @@ service AutograderService {
    rpc JoinCourse(JoinCourseRequest) returns (JoinCourseResponse);
    rpc GenerateJoinCode(GenerateJoinCodeRequest) returns (GenerateJoinCodeResponse);
    rpc ChangeAllowsJoinCourse(ChangeAllowsJoinCourseRequest) returns (ChangeAllowsJoinCourseResponse);
+   rpc InspectAllSubmissionsInAssignment(InspectAllSubmissionsInAssignmentRequest) returns (InspectAllSubmissionsInAssignmentResponse);
+   rpc InspectUserSubmissionHistory(InspectUserSubmissionHistoryRequest) returns (InspectUserSubmissionHistoryResponse);
 }

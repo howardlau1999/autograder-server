@@ -60,6 +60,8 @@ type AutograderServiceClient interface {
 	JoinCourse(ctx context.Context, in *JoinCourseRequest, opts ...grpc.CallOption) (*JoinCourseResponse, error)
 	GenerateJoinCode(ctx context.Context, in *GenerateJoinCodeRequest, opts ...grpc.CallOption) (*GenerateJoinCodeResponse, error)
 	ChangeAllowsJoinCourse(ctx context.Context, in *ChangeAllowsJoinCourseRequest, opts ...grpc.CallOption) (*ChangeAllowsJoinCourseResponse, error)
+	InspectAllSubmissionsInAssignment(ctx context.Context, in *InspectAllSubmissionsInAssignmentRequest, opts ...grpc.CallOption) (*InspectAllSubmissionsInAssignmentResponse, error)
+	InspectUserSubmissionHistory(ctx context.Context, in *InspectUserSubmissionHistoryRequest, opts ...grpc.CallOption) (*InspectUserSubmissionHistoryResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -435,6 +437,24 @@ func (c *autograderServiceClient) ChangeAllowsJoinCourse(ctx context.Context, in
 	return out, nil
 }
 
+func (c *autograderServiceClient) InspectAllSubmissionsInAssignment(ctx context.Context, in *InspectAllSubmissionsInAssignmentRequest, opts ...grpc.CallOption) (*InspectAllSubmissionsInAssignmentResponse, error) {
+	out := new(InspectAllSubmissionsInAssignmentResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/InspectAllSubmissionsInAssignment", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) InspectUserSubmissionHistory(ctx context.Context, in *InspectUserSubmissionHistoryRequest, opts ...grpc.CallOption) (*InspectUserSubmissionHistoryResponse, error) {
+	out := new(InspectUserSubmissionHistoryResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/InspectUserSubmissionHistory", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -477,6 +497,8 @@ type AutograderServiceServer interface {
 	JoinCourse(context.Context, *JoinCourseRequest) (*JoinCourseResponse, error)
 	GenerateJoinCode(context.Context, *GenerateJoinCodeRequest) (*GenerateJoinCodeResponse, error)
 	ChangeAllowsJoinCourse(context.Context, *ChangeAllowsJoinCourseRequest) (*ChangeAllowsJoinCourseResponse, error)
+	InspectAllSubmissionsInAssignment(context.Context, *InspectAllSubmissionsInAssignmentRequest) (*InspectAllSubmissionsInAssignmentResponse, error)
+	InspectUserSubmissionHistory(context.Context, *InspectUserSubmissionHistoryRequest) (*InspectUserSubmissionHistoryResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -597,6 +619,12 @@ func (UnimplementedAutograderServiceServer) GenerateJoinCode(context.Context, *G
 }
 func (UnimplementedAutograderServiceServer) ChangeAllowsJoinCourse(context.Context, *ChangeAllowsJoinCourseRequest) (*ChangeAllowsJoinCourseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ChangeAllowsJoinCourse not implemented")
+}
+func (UnimplementedAutograderServiceServer) InspectAllSubmissionsInAssignment(context.Context, *InspectAllSubmissionsInAssignmentRequest) (*InspectAllSubmissionsInAssignmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InspectAllSubmissionsInAssignment not implemented")
+}
+func (UnimplementedAutograderServiceServer) InspectUserSubmissionHistory(context.Context, *InspectUserSubmissionHistoryRequest) (*InspectUserSubmissionHistoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InspectUserSubmissionHistory not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1298,6 +1326,42 @@ func _AutograderService_ChangeAllowsJoinCourse_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_InspectAllSubmissionsInAssignment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InspectAllSubmissionsInAssignmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).InspectAllSubmissionsInAssignment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/InspectAllSubmissionsInAssignment",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).InspectAllSubmissionsInAssignment(ctx, req.(*InspectAllSubmissionsInAssignmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_InspectUserSubmissionHistory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InspectUserSubmissionHistoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).InspectUserSubmissionHistory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/InspectUserSubmissionHistory",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).InspectUserSubmissionHistory(ctx, req.(*InspectUserSubmissionHistoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1452,6 +1516,14 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ChangeAllowsJoinCourse",
 			Handler:    _AutograderService_ChangeAllowsJoinCourse_Handler,
+		},
+		{
+			MethodName: "InspectAllSubmissionsInAssignment",
+			Handler:    _AutograderService_InspectAllSubmissionsInAssignment_Handler,
+		},
+		{
+			MethodName: "InspectUserSubmissionHistory",
+			Handler:    _AutograderService_InspectUserSubmissionHistory_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

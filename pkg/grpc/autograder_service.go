@@ -804,10 +804,9 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 	}
 }
 
-func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, request *autograder_pb.GetSubmissionsInAssignmentRequest) (*autograder_pb.GetSubmissionsInAssignmentResponse, error) {
-	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
-	var submissions []*autograder_pb.GetSubmissionsInAssignmentResponse_SubmissionInfo
-	subIds, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, user.GetUserId(), request.GetAssignmentId())
+func (a *AutograderService) getSubmissionHistory(ctx context.Context, userId, assignmentId uint64) ([]*autograder_pb.SubmissionInfo, error) {
+	var submissions []*autograder_pb.SubmissionInfo
+	subIds, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, userId, assignmentId)
 	if err != nil {
 		return nil, status.Error(codes.NotFound, "NOT_FOUND")
 	}
@@ -826,19 +825,19 @@ func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, requ
 			maxScore = report.MaxScore
 			subStatus = report.GetStatus()
 		}
-		var submitters []*autograder_pb.GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter
+		var submitters []*autograder_pb.SubmissionInfo_Submitter
 		for _, uid := range sub.Submitters {
 			user, err := a.userRepo.GetUserById(ctx, uid)
 			if err != nil {
 				return nil, status.Error(codes.Internal, "GET_USER")
 			}
-			oneSubmitter := &autograder_pb.GetSubmissionsInAssignmentResponse_SubmissionInfo_Submitter{
+			oneSubmitter := &autograder_pb.SubmissionInfo_Submitter{
 				UserId:   uid,
 				Username: user.Username,
 			}
 			submitters = append(submitters, oneSubmitter)
 		}
-		ret := &autograder_pb.GetSubmissionsInAssignmentResponse_SubmissionInfo{
+		ret := &autograder_pb.SubmissionInfo{
 			SubmissionId: subId,
 			SubmittedAt:  sub.SubmittedAt,
 			Submitters:   submitters,
@@ -847,6 +846,15 @@ func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, requ
 			Status:       subStatus,
 		}
 		submissions = append(submissions, ret)
+	}
+	return submissions, nil
+}
+
+func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, request *autograder_pb.GetSubmissionsInAssignmentRequest) (*autograder_pb.GetSubmissionsInAssignmentResponse, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	submissions, err := a.getSubmissionHistory(ctx, user.GetUserId(), request.GetAssignmentId())
+	if err != nil {
+		return nil, err
 	}
 	resp := &autograder_pb.GetSubmissionsInAssignmentResponse{Submissions: submissions}
 	return resp, nil
@@ -1376,6 +1384,48 @@ func (a *AutograderService) ChangeAllowsJoinCourse(ctx context.Context, request 
 		return nil, status.Error(codes.Internal, "UPDATE_COURSE")
 	}
 	return &autograder_pb.ChangeAllowsJoinCourseResponse{AllowsJoin: course.AllowsJoin}, nil
+}
+
+func (a *AutograderService) InspectAllSubmissionsInAssignment(ctx context.Context, request *autograder_pb.InspectAllSubmissionsInAssignmentRequest) (*autograder_pb.InspectAllSubmissionsInAssignmentResponse, error) {
+	assignmentId := request.GetAssignmentId()
+	courseId := ctx.Value(courseIdCtxKey{}).(uint64)
+	members, err := a.courseRepo.GetUsersByCourse(ctx, courseId)
+	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId), zap.Uint64("assignmentId", assignmentId))
+	if err != nil {
+		l.Error("InspectAllSubmissionsInAssignment.GetUsers", zap.Error(err))
+		return nil, status.Error(codes.Internal, "GET_USERS")
+	}
+	var userSubmissionInfo []*autograder_pb.InspectAllSubmissionsInAssignmentResponse_UserSubmissionInfo
+	for _, member := range members {
+		user, err := a.userRepo.GetUserById(ctx, member.GetUserId())
+		if err != nil {
+			l.Error("InspectAllSubmissionsInAssignment.GetUser", zap.Error(err))
+			return nil, status.Error(codes.Internal, "GET_USER")
+		}
+		submissions, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, member.GetUserId(), assignmentId)
+		if err != nil {
+			l.Error("InspectAllSubmissionsInAssignment.GetSubmissions", zap.Error(err))
+			return nil, status.Error(codes.Internal, "GET_SUBMISSIONS")
+		}
+		userSubmissionInfo = append(userSubmissionInfo, &autograder_pb.InspectAllSubmissionsInAssignmentResponse_UserSubmissionInfo{
+			UserId:          member.GetUserId(),
+			Username:        user.GetUsername(),
+			Nickname:        user.GetNickname(),
+			StudentId:       user.GetStudentId(),
+			SubmissionCount: uint64(len(submissions)),
+		})
+	}
+	return &autograder_pb.InspectAllSubmissionsInAssignmentResponse{Entries: userSubmissionInfo}, nil
+}
+
+func (a *AutograderService) InspectUserSubmissionHistory(ctx context.Context, request *autograder_pb.InspectUserSubmissionHistoryRequest) (*autograder_pb.InspectUserSubmissionHistoryResponse, error) {
+	assignmentId := request.GetAssignmentId()
+	userId := request.GetUserId()
+	submissions, err := a.getSubmissionHistory(ctx, userId, assignmentId)
+	if err != nil {
+		return nil, err
+	}
+	return &autograder_pb.InspectUserSubmissionHistoryResponse{Submissions: submissions}, nil
 }
 
 func NewAutograderServiceServer(db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client, ghOauth2Config *oauth2.Config) *AutograderService {

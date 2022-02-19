@@ -272,6 +272,8 @@ func (a *AutograderService) initAuthFuncs() {
 				"CanWriteCourse",
 				"GenerateJoinCode",
 				"ChangeAllowsJoinCourse",
+				"InspectAllSubmissionsInAssignment",
+				"InspectUserSubmissionHistory",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireCourseWrite},
 		},
