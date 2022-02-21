@@ -696,7 +696,7 @@ func (a *AutograderService) CreateSubmission(ctx context.Context, request *autog
 		UserId:          user.GetUserId(),
 	}
 	id, err := a.submissionRepo.CreateSubmission(ctx, submission)
-	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Running}
+	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Queued}
 	err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, id, brief)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "UPDATE_BRIEF")

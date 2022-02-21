@@ -17,6 +17,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 type ProgrammingGrader interface {
@@ -25,8 +26,12 @@ type ProgrammingGrader interface {
 }
 
 type DockerProgrammingGrader struct {
-	cli *client.Client
-	srr repository.SubmissionReportRepository
+	cli         *client.Client
+	srr         repository.SubmissionReportRepository
+	concurrency int
+	running     int
+	mu          *sync.Mutex
+	cond        *sync.Cond
 }
 
 func truncateOutput(output string, maxLen int, prompt string) string {
@@ -146,6 +151,18 @@ type GradeFinished struct {
 }
 
 func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig, notifyC chan *GradeFinished) {
+	d.mu.Lock()
+	for d.running >= d.concurrency {
+		d.cond.Wait()
+	}
+	d.running++
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		d.running--
+		d.mu.Unlock()
+		d.cond.Signal()
+	}()
 	briefPB := &model_pb.SubmissionBriefReport{
 		Status: model_pb.SubmissionStatus_Running,
 	}
@@ -216,9 +233,11 @@ WriteReport:
 }
 
 func NewDockerProgrammingGrader(srr repository.SubmissionReportRepository) ProgrammingGrader {
+	mu := &sync.Mutex{}
+	cond := sync.NewCond(mu)
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		panic(err)
 	}
-	return &DockerProgrammingGrader{cli: cli, srr: srr}
+	return &DockerProgrammingGrader{cli: cli, srr: srr, mu: mu, cond: cond, concurrency: 10}
 }
