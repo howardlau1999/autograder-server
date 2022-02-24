@@ -140,6 +140,14 @@ message CreateSubmissionResponse {
   repeated string submitters = 3;
 }
 
+message ActivateSubmissionRequest {
+  uint64 submission_id = 1;
+}
+
+message ActivateSubmissionResponse {
+  bool activated = 1;
+}
+
 message UploadTokenPayload {
   uint64 user_id = 1;
   uint64 assignment_id = 2;
@@ -546,4 +554,5 @@ service AutograderService {
    rpc ChangeAllowsJoinCourse(ChangeAllowsJoinCourseRequest) returns (ChangeAllowsJoinCourseResponse);
    rpc InspectAllSubmissionsInAssignment(InspectAllSubmissionsInAssignmentRequest) returns (InspectAllSubmissionsInAssignmentResponse);
    rpc InspectUserSubmissionHistory(InspectUserSubmissionHistoryRequest) returns (InspectUserSubmissionHistoryResponse);
+   rpc ActivateSubmission(ActivateSubmissionRequest) returns (ActivateSubmissionResponse);
 }

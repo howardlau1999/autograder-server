@@ -957,6 +957,31 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 	}
 	return response, nil
 }
+func (a *AutograderService) ActivateSubmission(ctx context.Context, request *autograder_pb.ActivateSubmissionRequest) (*autograder_pb.ActivateSubmissionResponse, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	dbUser, _ := a.userRepo.GetUserById(ctx, user.GetUserId())
+	submission := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
+	report, err := a.submissionReportRepo.GetSubmissionReport(ctx, request.GetSubmissionId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "GET_REPORT")
+	}
+	if len(report.Leaderboard) == 0 {
+		return &autograder_pb.ActivateSubmissionResponse{Activated: false}, nil
+	}
+	err = a.leaderboardRepo.UpdateLeaderboardEntry(ctx, submission.GetAssignmentId(), user.GetUserId(), &model_pb.LeaderboardEntry{
+		SubmissionId: request.GetSubmissionId(),
+		Nickname:     dbUser.Nickname,
+		SubmittedAt:  submission.GetSubmittedAt(),
+		Items:        report.Leaderboard,
+		UserId:       user.GetUserId(),
+	})
+	if err != nil {
+		return nil, status.Error(codes.Internal, "UPDATE_ENTRY")
+	}
+	return &autograder_pb.ActivateSubmissionResponse{
+		Activated: true,
+	}, nil
+}
 
 func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint64, assignmentId uint64) {
 	assignment, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
@@ -975,15 +1000,6 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 	go func() {
 		r := <-notifyC
 		grpclog.Infof("submission %d finished", submissionId)
-		if len(r.Report.Leaderboard) > 0 {
-			if err := a.leaderboardRepo.UpdateLeaderboardEntry(ctx, assignmentId, submission.GetUserId(), &model_pb.LeaderboardEntry{
-				SubmissionId: submissionId,
-				Nickname:     submission.GetLeaderboardName(),
-				Items:        r.Report.Leaderboard,
-			}); err != nil {
-				grpclog.Errorf("failed to update leaderboard: %v", err)
-			}
-		}
 		a.subsMu.Lock()
 		for _, sub := range a.reportSubs[submissionId] {
 			if sub != nil {

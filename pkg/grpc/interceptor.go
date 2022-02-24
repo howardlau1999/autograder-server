@@ -282,6 +282,7 @@ func (a *AutograderService) initAuthFuncs() {
 				"InitDownload",
 				"GetFilesInSubmission",
 				"GetSubmissionReport",
+				"ActivateSubmission",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireSubmissionRead},
 		},

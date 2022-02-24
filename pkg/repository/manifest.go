@@ -2,10 +2,13 @@ package repository
 
 import (
 	model_pb "autograder-server/pkg/model/proto"
+	"context"
+	"encoding/binary"
 	"fmt"
 	"github.com/cockroachdb/pebble"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"time"
 )
 
 type ManifestRepository interface {
@@ -21,8 +24,34 @@ type KVManifestRepository struct {
 	seq Sequencer
 }
 
+func (mr *KVManifestRepository) gc(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	for range ticker.C {
+
+		prefix := mr.getMetadataPrefix()
+		prefixLen := len(prefix)
+		iter := mr.db.NewIter(PrefixIterOptions(prefix))
+		for iter.First(); iter.Valid(); iter.Next() {
+			id := binary.BigEndian.Uint64(iter.Key()[prefixLen:])
+			metadata, err := mr.GetManifestMetadata(id)
+			if err != nil {
+				continue
+			}
+			now := time.Now()
+			if now.After(metadata.CreatedAt.AsTime().Add(10 * time.Minute)) {
+				mr.DeleteManifest(id)
+			}
+		}
+	}
+	ticker.Stop()
+}
+
+func (mr *KVManifestRepository) getMetadataPrefix() []byte {
+	return []byte("manifest:metadata:")
+}
+
 func (mr *KVManifestRepository) getMetadataKey(id uint64) []byte {
-	return []byte(fmt.Sprintf("manifest:metadata:%d", id))
+	return append(mr.getMetadataPrefix(), Uint64ToBytes(id)...)
 }
 
 func (mr *KVManifestRepository) getFileKey(id uint64, filename string) []byte {
@@ -72,25 +101,27 @@ func (mr *KVManifestRepository) GetFilesInManifest(id uint64) ([]string, error) 
 	return files, nil
 }
 
-func (mr *KVManifestRepository) AddFileToManifest(filename string, id uint64) (uint64, error) {
-	createdTsKey := mr.getMetadataKey(id)
-	_, closer, err := mr.db.Get(createdTsKey)
+func (mr *KVManifestRepository) GetManifestMetadata(id uint64) (*model_pb.ManifestMetadata, error) {
+	metadataKey := mr.getMetadataKey(id)
+	raw, closer, err := mr.db.Get(metadataKey)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	err = closer.Close()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
+	metadata := &model_pb.ManifestMetadata{}
+	err = proto.Unmarshal(raw, metadata)
+	if err != nil {
+		return nil, err
+	}
+	return metadata, nil
+}
+
+func (mr *KVManifestRepository) AddFileToManifest(filename string, id uint64) (uint64, error) {
 	fileKey := mr.getFileKey(id, filename)
-	_, closer, err = mr.db.Get(fileKey)
-	if err != nil && err != pebble.ErrNotFound {
-		return 0, err
-	}
-	if err == nil {
-		closer.Close()
-	}
-	err = mr.db.Set(fileKey, nil, pebble.Sync)
+	err := mr.db.Set(fileKey, Uint64ToBytes(id), pebble.Sync)
 	if err != nil {
 		return 0, nil
 	}

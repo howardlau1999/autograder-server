@@ -87,11 +87,8 @@ enum TestcaseVisibility {
 message LeaderboardItem {
   string name = 1;
   google.protobuf.Value value = 2;
-  enum Order {
-    Asc = 0;
-    Desc = 1;
-  }
-  Order order = 3;
+  bool is_desc = 3;
+  int64 order = 4;
 }
 
 message LeaderboardEntry {
@@ -99,6 +96,7 @@ message LeaderboardEntry {
   string nickname = 2;
   repeated LeaderboardItem items = 3;
   uint64 user_id = 4;
+  google.protobuf.Timestamp submitted_at = 5;
 }
 
 message SubmissionReportTestcase {

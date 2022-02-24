@@ -62,6 +62,7 @@ type AutograderServiceClient interface {
 	ChangeAllowsJoinCourse(ctx context.Context, in *ChangeAllowsJoinCourseRequest, opts ...grpc.CallOption) (*ChangeAllowsJoinCourseResponse, error)
 	InspectAllSubmissionsInAssignment(ctx context.Context, in *InspectAllSubmissionsInAssignmentRequest, opts ...grpc.CallOption) (*InspectAllSubmissionsInAssignmentResponse, error)
 	InspectUserSubmissionHistory(ctx context.Context, in *InspectUserSubmissionHistoryRequest, opts ...grpc.CallOption) (*InspectUserSubmissionHistoryResponse, error)
+	ActivateSubmission(ctx context.Context, in *ActivateSubmissionRequest, opts ...grpc.CallOption) (*ActivateSubmissionResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -455,6 +456,15 @@ func (c *autograderServiceClient) InspectUserSubmissionHistory(ctx context.Conte
 	return out, nil
 }
 
+func (c *autograderServiceClient) ActivateSubmission(ctx context.Context, in *ActivateSubmissionRequest, opts ...grpc.CallOption) (*ActivateSubmissionResponse, error) {
+	out := new(ActivateSubmissionResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/ActivateSubmission", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -499,6 +509,7 @@ type AutograderServiceServer interface {
 	ChangeAllowsJoinCourse(context.Context, *ChangeAllowsJoinCourseRequest) (*ChangeAllowsJoinCourseResponse, error)
 	InspectAllSubmissionsInAssignment(context.Context, *InspectAllSubmissionsInAssignmentRequest) (*InspectAllSubmissionsInAssignmentResponse, error)
 	InspectUserSubmissionHistory(context.Context, *InspectUserSubmissionHistoryRequest) (*InspectUserSubmissionHistoryResponse, error)
+	ActivateSubmission(context.Context, *ActivateSubmissionRequest) (*ActivateSubmissionResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -625,6 +636,9 @@ func (UnimplementedAutograderServiceServer) InspectAllSubmissionsInAssignment(co
 }
 func (UnimplementedAutograderServiceServer) InspectUserSubmissionHistory(context.Context, *InspectUserSubmissionHistoryRequest) (*InspectUserSubmissionHistoryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InspectUserSubmissionHistory not implemented")
+}
+func (UnimplementedAutograderServiceServer) ActivateSubmission(context.Context, *ActivateSubmissionRequest) (*ActivateSubmissionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ActivateSubmission not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1362,6 +1376,24 @@ func _AutograderService_InspectUserSubmissionHistory_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_ActivateSubmission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ActivateSubmissionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).ActivateSubmission(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/ActivateSubmission",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).ActivateSubmission(ctx, req.(*ActivateSubmissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1524,6 +1556,10 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InspectUserSubmissionHistory",
 			Handler:    _AutograderService_InspectUserSubmissionHistory_Handler,
+		},
+		{
+			MethodName: "ActivateSubmission",
+			Handler:    _AutograderService_ActivateSubmission_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -10,6 +10,7 @@ import (
 
 type LeaderboardRepository interface {
 	UpdateLeaderboardEntry(ctx context.Context, assignmentId, userId uint64, entry *model_pb.LeaderboardEntry) error
+	GetLeaderboardEntry(ctx context.Context, assignmentId, userId uint64) (*model_pb.LeaderboardEntry, error)
 	GetLeaderboard(ctx context.Context, assignmentId uint64) ([]*model_pb.LeaderboardEntry, error)
 	HasLeaderboard(ctx context.Context, assignmentId uint64) bool
 }
@@ -59,6 +60,22 @@ func (lr *KVLeaderboardRepository) UpdateLeaderboardEntry(ctx context.Context, a
 	}
 
 	return lr.db.Set(lr.getMarkerId(assignmentId), nil, pebble.Sync)
+}
+
+func (lr *KVLeaderboardRepository) GetLeaderboardEntry(ctx context.Context, assignmentId, userId uint64) (*model_pb.LeaderboardEntry, error) {
+	key := lr.getAssignmentUserKey(assignmentId, userId)
+	raw, closer, err := lr.db.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	entry := &model_pb.LeaderboardEntry{}
+	err = proto.Unmarshal(raw, entry)
+	closer.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	return entry, nil
 }
 
 func (lr *KVLeaderboardRepository) HasLeaderboard(ctx context.Context, assignmentId uint64) bool {
