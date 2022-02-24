@@ -89,6 +89,7 @@ message LeaderboardItem {
   google.protobuf.Value value = 2;
   bool is_desc = 3;
   int64 order = 4;
+  string suffix = 5;
 }
 
 message LeaderboardEntry {
