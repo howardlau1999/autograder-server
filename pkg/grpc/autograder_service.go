@@ -431,7 +431,10 @@ func (a *AutograderService) InitDownload(ctx context.Context, request *autograde
 	if isFilenameInvalid(filename) {
 		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
 	}
-	realpath := filepath.Join(sub.GetPath(), filename)
+	realpath := path.Join(sub.GetPath(), filename)
+	if request.GetIsOutput() {
+		realpath = path.Join(fmt.Sprintf("runs/submissions/%d/results/outputs", request.GetSubmissionId()), filename)
+	}
 	_, fn := path.Split(filename)
 	file, err := a.ls.Open(ctx, realpath)
 	if err != nil {
@@ -774,7 +777,7 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 		a.subsMu.Unlock()
 		return status.Error(codes.Internal, "GET_BRIEF")
 	}
-	if err == nil && brief.GetStatus() != model_pb.SubmissionStatus_Running {
+	if err == nil && brief.GetStatus() != model_pb.SubmissionStatus_Running && brief.GetStatus() != model_pb.SubmissionStatus_Queued {
 		a.subsMu.Unlock()
 		return server.Send(&autograder_pb.SubscribeSubmissionResponse{
 			Score:    brief.GetScore(),
@@ -785,7 +788,7 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 	var idx int
 	l.Debug("SubscribeSubmission.Begin")
 	a.reportSubs[id] = append(a.reportSubs[id], c)
-	idx = len(a.reportSubs) - 1
+	idx = len(a.reportSubs[id]) - 1
 	a.subsMu.Unlock()
 	select {
 	case <-server.Context().Done():
@@ -957,6 +960,7 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 	}
 	return response, nil
 }
+
 func (a *AutograderService) ActivateSubmission(ctx context.Context, request *autograder_pb.ActivateSubmissionRequest) (*autograder_pb.ActivateSubmissionResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	dbUser, _ := a.userRepo.GetUserById(ctx, user.GetUserId())
@@ -994,8 +998,11 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 		grpclog.Errorf("failed to get submission %d: %v", submissionId, err)
 		return
 	}
+	err = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, submissionId, assignmentId)
 	config := assignment.ProgrammingConfig
 	notifyC := make(chan *grader.GradeFinished)
+	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Queued}
+	err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, submissionId, brief)
 	go a.progGrader.GradeSubmission(submissionId, submission, config, notifyC)
 	go func() {
 		r := <-notifyC
@@ -1442,6 +1449,33 @@ func (a *AutograderService) InspectUserSubmissionHistory(ctx context.Context, re
 		return nil, err
 	}
 	return &autograder_pb.InspectUserSubmissionHistoryResponse{Submissions: submissions}, nil
+}
+
+func (a *AutograderService) RegradeSubmission(ctx context.Context, request *autograder_pb.RegradeSubmissionRequest) (*autograder_pb.RegradeSubmissionResponse, error) {
+	assignmentId := ctx.Value(submissionCtxKey{}).(*model_pb.Submission).AssignmentId
+	go a.runSubmission(context.Background(), request.SubmissionId, assignmentId)
+	return &autograder_pb.RegradeSubmissionResponse{}, nil
+}
+
+func (a *AutograderService) RegradeAssignment(ctx context.Context, request *autograder_pb.RegradeAssignmentRequest) (*autograder_pb.RegradeAssignmentResponse, error) {
+	l := ctxzap.Extract(ctx)
+	courseId := ctx.Value(courseIdCtxKey{}).(uint64)
+	members, err := a.courseRepo.GetUsersByCourse(ctx, courseId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "GET_USERS")
+	}
+	var submissionIds []uint64
+	for _, member := range members {
+		userSubmissions, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, member.UserId, request.AssignmentId)
+		if err != nil {
+			l.Error("RegradeAssignment.GetSubmissions", zap.Error(err))
+		}
+		submissionIds = append(submissionIds, userSubmissions...)
+	}
+	for _, submissionId := range submissionIds {
+		go a.runSubmission(context.Background(), submissionId, request.GetAssignmentId())
+	}
+	return &autograder_pb.RegradeAssignmentResponse{}, nil
 }
 
 func NewAutograderServiceServer(db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client, ghOauth2Config *oauth2.Config) *AutograderService {

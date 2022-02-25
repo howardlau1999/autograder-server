@@ -95,10 +95,12 @@ func (d *DockerProgrammingGrader) runDocker(ctx context.Context, submissionId ui
 	runDir := filepath.Join(cwd, fmt.Sprintf("runs/submissions/%d", submissionId))
 	resultsDir := filepath.Join(runDir, "results")
 	resultsJSONPath = filepath.Join(resultsDir, "results.json")
+	outputsDir := filepath.Join(resultsDir, "outputs")
 	subDir := filepath.Join(cwd, submission.Path)
 	os.RemoveAll(runDir)
 	os.MkdirAll(runDir, 0755)
 	os.MkdirAll(resultsDir, 0755)
+	os.MkdirAll(outputsDir, 0755)
 	hstCfg := &container.HostConfig{
 		Mounts: []mount.Mount{
 			{Type: mount.TypeBind, Source: subDir, Target: "/autograder/submission"},

@@ -280,6 +280,7 @@ message InitDownloadRequest {
   uint64 submission_id = 1;
   string filename = 2;
   bool is_directory = 3;
+  bool is_output = 4;
 }
 
 enum DownloadFileType {
@@ -513,6 +514,22 @@ message InspectUserSubmissionHistoryResponse {
   repeated SubmissionInfo submissions = 1;
 }
 
+message RegradeSubmissionRequest {
+  uint64 submission_id = 1;
+}
+
+message RegradeSubmissionResponse {
+
+}
+
+message RegradeAssignmentRequest {
+  uint64 assignment_id = 1;
+}
+
+message RegradeAssignmentResponse {
+
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -555,4 +572,6 @@ service AutograderService {
    rpc InspectAllSubmissionsInAssignment(InspectAllSubmissionsInAssignmentRequest) returns (InspectAllSubmissionsInAssignmentResponse);
    rpc InspectUserSubmissionHistory(InspectUserSubmissionHistoryRequest) returns (InspectUserSubmissionHistoryResponse);
    rpc ActivateSubmission(ActivateSubmissionRequest) returns (ActivateSubmissionResponse);
+   rpc RegradeSubmission(RegradeSubmissionRequest) returns (RegradeSubmissionResponse);
+   rpc RegradeAssignment(RegradeAssignmentRequest) returns (RegradeAssignmentResponse);
 }

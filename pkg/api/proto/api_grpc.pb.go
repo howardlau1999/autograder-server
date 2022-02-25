@@ -63,6 +63,8 @@ type AutograderServiceClient interface {
 	InspectAllSubmissionsInAssignment(ctx context.Context, in *InspectAllSubmissionsInAssignmentRequest, opts ...grpc.CallOption) (*InspectAllSubmissionsInAssignmentResponse, error)
 	InspectUserSubmissionHistory(ctx context.Context, in *InspectUserSubmissionHistoryRequest, opts ...grpc.CallOption) (*InspectUserSubmissionHistoryResponse, error)
 	ActivateSubmission(ctx context.Context, in *ActivateSubmissionRequest, opts ...grpc.CallOption) (*ActivateSubmissionResponse, error)
+	RegradeSubmission(ctx context.Context, in *RegradeSubmissionRequest, opts ...grpc.CallOption) (*RegradeSubmissionResponse, error)
+	RegradeAssignment(ctx context.Context, in *RegradeAssignmentRequest, opts ...grpc.CallOption) (*RegradeAssignmentResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -465,6 +467,24 @@ func (c *autograderServiceClient) ActivateSubmission(ctx context.Context, in *Ac
 	return out, nil
 }
 
+func (c *autograderServiceClient) RegradeSubmission(ctx context.Context, in *RegradeSubmissionRequest, opts ...grpc.CallOption) (*RegradeSubmissionResponse, error) {
+	out := new(RegradeSubmissionResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/RegradeSubmission", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) RegradeAssignment(ctx context.Context, in *RegradeAssignmentRequest, opts ...grpc.CallOption) (*RegradeAssignmentResponse, error) {
+	out := new(RegradeAssignmentResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/RegradeAssignment", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -510,6 +530,8 @@ type AutograderServiceServer interface {
 	InspectAllSubmissionsInAssignment(context.Context, *InspectAllSubmissionsInAssignmentRequest) (*InspectAllSubmissionsInAssignmentResponse, error)
 	InspectUserSubmissionHistory(context.Context, *InspectUserSubmissionHistoryRequest) (*InspectUserSubmissionHistoryResponse, error)
 	ActivateSubmission(context.Context, *ActivateSubmissionRequest) (*ActivateSubmissionResponse, error)
+	RegradeSubmission(context.Context, *RegradeSubmissionRequest) (*RegradeSubmissionResponse, error)
+	RegradeAssignment(context.Context, *RegradeAssignmentRequest) (*RegradeAssignmentResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -639,6 +661,12 @@ func (UnimplementedAutograderServiceServer) InspectUserSubmissionHistory(context
 }
 func (UnimplementedAutograderServiceServer) ActivateSubmission(context.Context, *ActivateSubmissionRequest) (*ActivateSubmissionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ActivateSubmission not implemented")
+}
+func (UnimplementedAutograderServiceServer) RegradeSubmission(context.Context, *RegradeSubmissionRequest) (*RegradeSubmissionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RegradeSubmission not implemented")
+}
+func (UnimplementedAutograderServiceServer) RegradeAssignment(context.Context, *RegradeAssignmentRequest) (*RegradeAssignmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RegradeAssignment not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1394,6 +1422,42 @@ func _AutograderService_ActivateSubmission_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_RegradeSubmission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegradeSubmissionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).RegradeSubmission(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/RegradeSubmission",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).RegradeSubmission(ctx, req.(*RegradeSubmissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_RegradeAssignment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegradeAssignmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).RegradeAssignment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/RegradeAssignment",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).RegradeAssignment(ctx, req.(*RegradeAssignmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1560,6 +1624,14 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ActivateSubmission",
 			Handler:    _AutograderService_ActivateSubmission_Handler,
+		},
+		{
+			MethodName: "RegradeSubmission",
+			Handler:    _AutograderService_RegradeSubmission_Handler,
+		},
+		{
+			MethodName: "RegradeAssignment",
+			Handler:    _AutograderService_RegradeAssignment_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
