@@ -688,6 +688,9 @@ func (a *AutograderService) GetSubmissionReport(ctx context.Context, request *au
 	if brief == nil {
 		return nil, status.Error(codes.NotFound, "NOT_FOUND")
 	}
+	if brief.GetStatus() == model_pb.SubmissionStatus_Queued {
+		return nil, status.Error(codes.NotFound, "QUEUED")
+	}
 	if brief.GetStatus() == model_pb.SubmissionStatus_Running {
 		return nil, status.Error(codes.NotFound, "RUNNING")
 	}
@@ -798,6 +801,10 @@ func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_
 }
 
 func (a *AutograderService) SubscribeSubmission(request *autograder_pb.SubscribeSubmissionRequest, server autograder_pb.AutograderService_SubscribeSubmissionServer) error {
+	_, err := a.AuthFunc(server.Context(), request, "/AutograderService/SubscribeSubmission")
+	if err != nil {
+		return err
+	}
 	c := make(chan *grader.GradeFinished)
 	id := request.GetSubmissionId()
 	l := ctxzap.Extract(server.Context()).With(zap.Uint64("submissionId", id))
@@ -821,20 +828,25 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 	a.reportSubs[id] = append(a.reportSubs[id], c)
 	idx = len(a.reportSubs[id]) - 1
 	a.subsMu.Unlock()
-	select {
-	case <-server.Context().Done():
-		a.subsMu.Lock()
-		if len(a.reportSubs[id]) > idx {
-			a.reportSubs[id][idx] = nil
+	for {
+		select {
+		case <-server.Context().Done():
+			a.subsMu.Lock()
+			if len(a.reportSubs[id]) > idx {
+				a.reportSubs[id][idx] = nil
+			}
+			a.subsMu.Unlock()
+			return nil
+		case r := <-c:
+			err := server.Send(&autograder_pb.SubscribeSubmissionResponse{
+				Score:    r.BriefReport.GetScore(),
+				MaxScore: r.BriefReport.GetMaxScore(),
+				Status:   r.BriefReport.GetStatus(),
+			})
+			if r.BriefReport.GetStatus() == model_pb.SubmissionStatus_Finished {
+				return err
+			}
 		}
-		a.subsMu.Unlock()
-		return nil
-	case r := <-c:
-		return server.Send(&autograder_pb.SubscribeSubmissionResponse{
-			Score:    r.BriefReport.GetScore(),
-			MaxScore: r.BriefReport.GetMaxScore(),
-			Status:   r.BriefReport.GetStatus(),
-		})
 	}
 }
 
@@ -1034,16 +1046,22 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 	err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, submissionId, brief)
 	go a.progGrader.GradeSubmission(submissionId, submission, config, notifyC)
 	go func() {
-		r := <-notifyC
-		grpclog.Infof("submission %d finished", submissionId)
-		a.subsMu.Lock()
-		for _, sub := range a.reportSubs[submissionId] {
-			if sub != nil {
-				sub <- r
+		for {
+			r := <-notifyC
+			a.subsMu.Lock()
+			for _, sub := range a.reportSubs[submissionId] {
+				if sub != nil {
+					sub <- r
+				}
 			}
+			if r.BriefReport.GetStatus() == model_pb.SubmissionStatus_Finished || r.BriefReport.GetStatus() == model_pb.SubmissionStatus_Failed {
+				grpclog.Infof("submission %d finished", submissionId)
+				delete(a.reportSubs, submissionId)
+				a.subsMu.Unlock()
+				return
+			}
+			a.subsMu.Unlock()
 		}
-		delete(a.reportSubs, submissionId)
-		a.subsMu.Unlock()
 	}()
 }
 
@@ -1538,5 +1556,6 @@ func NewAutograderServiceServer(db *pebble.DB, ls *storage.LocalStorage, mailer 
 		subsMu:               &sync.Mutex{},
 	}
 	a.initAuthFuncs()
+	go a.runUnfinishedSubmissions()
 	return a
 }

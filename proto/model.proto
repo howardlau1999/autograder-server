@@ -58,6 +58,9 @@ message RubricItem {
 message ProgrammingAssignmentConfig {
   string image = 1;
   uint64 full_score = 2;
+  float cpu = 3;
+  int64 memory = 4;
+  int64 timeout = 5;
 }
 
 enum AssignmentType {

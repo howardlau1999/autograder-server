@@ -212,7 +212,6 @@ func (a *AutograderService) initAuthFuncs() {
 			Methods: []string{
 				"Login",
 				"SignUp",
-				"SubscribeSubmission",
 				"ResetPassword",
 				"GithubLogin",
 			},
@@ -285,6 +284,7 @@ func (a *AutograderService) initAuthFuncs() {
 				"InitDownload",
 				"GetFilesInSubmission",
 				"GetSubmissionReport",
+				"SubscribeSubmission",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireSubmissionRead},
 		},
@@ -332,13 +332,7 @@ func UnaryAuth() grpc.UnaryServerInterceptor {
 
 func StreamAuth() grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		authSrv := srv.(ServiceAuthFunc)
 		ctx := ss.Context()
-		var err error
-		ctx, err = authSrv.AuthFunc(ctx, nil, info.FullMethod)
-		if err != nil {
-			return err
-		}
 
 		wrapped := grpc_middleware.WrapServerStream(ss)
 		wrapped.WrappedContext = ctx

@@ -12,12 +12,15 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/spf13/viper"
 	"google.golang.org/grpc/grpclog"
 	"google.golang.org/protobuf/encoding/protojson"
 	"io/ioutil"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 type ProgrammingGrader interface {
@@ -107,6 +110,13 @@ func (d *DockerProgrammingGrader) runDocker(ctx context.Context, submissionId ui
 			{Type: mount.TypeBind, Source: resultsDir, Target: "/autograder/results"},
 		},
 	}
+	if config.GetCpu() > 0 {
+		hstCfg.CPUQuota = int64(math.Round(float64(100000 * config.GetCpu())))
+		hstCfg.CPUShares = int64(math.Round(float64(1024 * config.GetCpu())))
+	}
+	if config.GetMemory() > 0 {
+		hstCfg.Memory = config.GetMemory()
+	}
 	netCfg := &network.NetworkingConfig{}
 	platform := &specs.Platform{Architecture: "amd64", OS: "linux"}
 	body, err := d.cli.ContainerCreate(ctx, ctCfg, hstCfg, netCfg, platform, "")
@@ -123,13 +133,22 @@ func (d *DockerProgrammingGrader) runDocker(ctx context.Context, submissionId ui
 		grpclog.Errorf("failed to start container for %d: %v", submissionId, err)
 		return
 	}
+	timeout := 5 * time.Minute
+	if config.GetTimeout() > 0 {
+		timeout = time.Duration(config.GetTimeout()) * time.Second
+	}
+	ticker := time.NewTicker(timeout)
+	defer ticker.Stop()
 	select {
 	case err := <-errC:
 		internalError = 5
 		grpclog.Errorf("failed to wait container for %d: %v", submissionId, err)
 		return
+	case <-ticker.C:
+		internalError = -2
+		d.cli.ContainerRemove(ctx, id, types.ContainerRemoveOptions{Force: true})
+		return
 	case <-doneC:
-
 	}
 	containerDetail, err := d.cli.ContainerInspect(ctx, id)
 	if err != nil {
@@ -167,6 +186,9 @@ func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submissio
 	}()
 	briefPB := &model_pb.SubmissionBriefReport{
 		Status: model_pb.SubmissionStatus_Running,
+	}
+	if notifyC != nil {
+		go func() { notifyC <- &GradeFinished{BriefReport: briefPB} }()
 	}
 	ctx := context.Background()
 	_ = d.srr.UpdateSubmissionBriefReport(ctx, submissionId, briefPB)
@@ -241,5 +263,5 @@ func NewDockerProgrammingGrader(srr repository.SubmissionReportRepository) Progr
 	if err != nil {
 		panic(err)
 	}
-	return &DockerProgrammingGrader{cli: cli, srr: srr, mu: mu, cond: cond, concurrency: 10}
+	return &DockerProgrammingGrader{cli: cli, srr: srr, mu: mu, cond: cond, concurrency: viper.GetInt("grader.concurrency")}
 }

@@ -123,6 +123,7 @@ func readConfig() {
 	viper.AddConfigPath(".")
 	viper.AutomaticEnv()
 
+	viper.SetDefault("grader.concurrency", 5)
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	err := viper.ReadInConfig()
