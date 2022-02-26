@@ -194,6 +194,7 @@ message GetAssignmentRequest {
 message GetAssignmentResponse {
   Assignment assignment = 1;
   CourseRole role = 2;
+  bool anonymous = 3;
 }
 
 message GetCourseRequest {
@@ -230,6 +231,9 @@ message GetLeaderboardRequest {
 
 message GetLeaderboardResponse {
   repeated LeaderboardEntry entries = 1;
+  bool anonymous = 2;
+  bool full = 3;
+  CourseRole role = 4;
 }
 
 message HasLeaderboardRequest {
@@ -530,6 +534,15 @@ message RegradeAssignmentResponse {
 
 }
 
+message ChangeLeaderboardAnonymousRequest {
+  uint64 assignment_id = 1;
+  bool anonymous = 2;
+}
+
+message ChangeLeaderboardAnonymousResponse {
+  bool anonymous = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -574,4 +587,5 @@ service AutograderService {
    rpc ActivateSubmission(ActivateSubmissionRequest) returns (ActivateSubmissionResponse);
    rpc RegradeSubmission(RegradeSubmissionRequest) returns (RegradeSubmissionResponse);
    rpc RegradeAssignment(RegradeAssignmentRequest) returns (RegradeAssignmentResponse);
+   rpc ChangeLeaderboardAnonymous(ChangeLeaderboardAnonymousRequest) returns (ChangeLeaderboardAnonymousResponse);
 }

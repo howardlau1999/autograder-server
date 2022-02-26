@@ -77,7 +77,7 @@ const SignUpSubject = "Autograder 注册验证码"
 const SignUpTemplate = "您的注册验证码为：%s，10 分钟内有效。\nAutograder"
 const SignUpRepoType = "sign_up"
 
-var UsernameRegExp = regexp.MustCompile("^[a-zA-Z][a-zA-Z0-9_]{3,}$")
+var UsernameRegExp = regexp.MustCompile("^[a-zA-Z][a-zA-Z0-9_-]{3,20}$")
 var EmailCodeValidDuration = 10 * time.Minute
 
 func (a *AutograderService) sendEmailCode(to string, subject string, code string, template string) error {
@@ -585,7 +585,37 @@ func (a *AutograderService) HasLeaderboard(ctx context.Context, request *autogra
 
 func (a *AutograderService) GetLeaderboard(ctx context.Context, request *autograder_pb.GetLeaderboardRequest) (*autograder_pb.GetLeaderboardResponse, error) {
 	entries, err := a.leaderboardRepo.GetLeaderboard(ctx, request.GetAssignmentId())
-	resp := &autograder_pb.GetLeaderboardResponse{Entries: entries}
+	anonymous := a.leaderboardRepo.GetLeaderboardAnonymous(ctx, request.GetAssignmentId())
+	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	full := member.GetRole() == model_pb.CourseRole_TA || member.GetRole() == model_pb.CourseRole_Instructor
+	if anonymous && !full {
+		for _, entry := range entries {
+			if entry.UserId == user.UserId {
+				continue
+			}
+			entry.UserId = 0
+		}
+		resp := &autograder_pb.GetLeaderboardResponse{Entries: entries, Anonymous: anonymous, Full: full, Role: member.GetRole()}
+		return resp, err
+	}
+	for _, entry := range entries {
+		userId := entry.GetUserId()
+		dbUser, err := a.userRepo.GetUserById(ctx, userId)
+		if err != nil {
+			continue
+		}
+		if userId != user.UserId {
+			entry.UserId = 0
+		}
+		entry.Nickname = dbUser.Nickname
+		if full {
+			entry.Username = dbUser.Username
+			entry.StudentId = dbUser.StudentId
+			entry.Email = dbUser.Email
+		}
+	}
+	resp := &autograder_pb.GetLeaderboardResponse{Entries: entries, Anonymous: anonymous, Full: full, Role: member.GetRole()}
 	return resp, err
 }
 
@@ -647,7 +677,8 @@ func (a *AutograderService) GetCourse(ctx context.Context, request *autograder_p
 func (a *AutograderService) GetAssignment(ctx context.Context, request *autograder_pb.GetAssignmentRequest) (*autograder_pb.GetAssignmentResponse, error) {
 	assignment, err := a.assignmentRepo.GetAssignment(ctx, request.GetAssignmentId())
 	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
-	resp := &autograder_pb.GetAssignmentResponse{Assignment: assignment, Role: member.GetRole()}
+	anonymous := a.leaderboardRepo.GetLeaderboardAnonymous(ctx, request.GetAssignmentId())
+	resp := &autograder_pb.GetAssignmentResponse{Assignment: assignment, Role: member.GetRole(), Anonymous: anonymous}
 	return resp, err
 }
 
@@ -963,7 +994,6 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 
 func (a *AutograderService) ActivateSubmission(ctx context.Context, request *autograder_pb.ActivateSubmissionRequest) (*autograder_pb.ActivateSubmissionResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
-	dbUser, _ := a.userRepo.GetUserById(ctx, user.GetUserId())
 	submission := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	report, err := a.submissionReportRepo.GetSubmissionReport(ctx, request.GetSubmissionId())
 	if err != nil {
@@ -974,7 +1004,6 @@ func (a *AutograderService) ActivateSubmission(ctx context.Context, request *aut
 	}
 	err = a.leaderboardRepo.UpdateLeaderboardEntry(ctx, submission.GetAssignmentId(), user.GetUserId(), &model_pb.LeaderboardEntry{
 		SubmissionId: request.GetSubmissionId(),
-		Nickname:     dbUser.Nickname,
 		SubmittedAt:  submission.GetSubmittedAt(),
 		Items:        report.Leaderboard,
 		UserId:       user.GetUserId(),
@@ -1318,6 +1347,12 @@ func (a *AutograderService) UpdateUser(ctx context.Context, request *autograder_
 	}
 	dbUser.Nickname = request.GetNickname()
 	dbUser.StudentId = request.GetStudentId()
+	if len(dbUser.Nickname) > 16 {
+		return nil, status.Error(codes.InvalidArgument, "NICKNAME_TOO_LONG")
+	}
+	if len(dbUser.StudentId) > 16 {
+		return nil, status.Error(codes.InvalidArgument, "STUDENT_ID_TOO_LONG")
+	}
 	err = a.userRepo.UpdateUser(ctx, user.GetUserId(), dbUser)
 	if err != nil {
 		return &autograder_pb.UpdateUserResponse{Success: false}, nil
@@ -1476,6 +1511,11 @@ func (a *AutograderService) RegradeAssignment(ctx context.Context, request *auto
 		go a.runSubmission(context.Background(), submissionId, request.GetAssignmentId())
 	}
 	return &autograder_pb.RegradeAssignmentResponse{}, nil
+}
+
+func (a *AutograderService) ChangeLeaderboardAnonymous(ctx context.Context, request *autograder_pb.ChangeLeaderboardAnonymousRequest) (*autograder_pb.ChangeLeaderboardAnonymousResponse, error) {
+	a.leaderboardRepo.SetLeaderboardAnonymous(ctx, request.GetAssignmentId(), request.GetAnonymous())
+	return &autograder_pb.ChangeLeaderboardAnonymousResponse{Anonymous: request.Anonymous}, nil
 }
 
 func NewAutograderServiceServer(db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client, ghOauth2Config *oauth2.Config) *AutograderService {

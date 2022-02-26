@@ -65,6 +65,7 @@ type AutograderServiceClient interface {
 	ActivateSubmission(ctx context.Context, in *ActivateSubmissionRequest, opts ...grpc.CallOption) (*ActivateSubmissionResponse, error)
 	RegradeSubmission(ctx context.Context, in *RegradeSubmissionRequest, opts ...grpc.CallOption) (*RegradeSubmissionResponse, error)
 	RegradeAssignment(ctx context.Context, in *RegradeAssignmentRequest, opts ...grpc.CallOption) (*RegradeAssignmentResponse, error)
+	ChangeLeaderboardAnonymous(ctx context.Context, in *ChangeLeaderboardAnonymousRequest, opts ...grpc.CallOption) (*ChangeLeaderboardAnonymousResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -485,6 +486,15 @@ func (c *autograderServiceClient) RegradeAssignment(ctx context.Context, in *Reg
 	return out, nil
 }
 
+func (c *autograderServiceClient) ChangeLeaderboardAnonymous(ctx context.Context, in *ChangeLeaderboardAnonymousRequest, opts ...grpc.CallOption) (*ChangeLeaderboardAnonymousResponse, error) {
+	out := new(ChangeLeaderboardAnonymousResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/ChangeLeaderboardAnonymous", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -532,6 +542,7 @@ type AutograderServiceServer interface {
 	ActivateSubmission(context.Context, *ActivateSubmissionRequest) (*ActivateSubmissionResponse, error)
 	RegradeSubmission(context.Context, *RegradeSubmissionRequest) (*RegradeSubmissionResponse, error)
 	RegradeAssignment(context.Context, *RegradeAssignmentRequest) (*RegradeAssignmentResponse, error)
+	ChangeLeaderboardAnonymous(context.Context, *ChangeLeaderboardAnonymousRequest) (*ChangeLeaderboardAnonymousResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -667,6 +678,9 @@ func (UnimplementedAutograderServiceServer) RegradeSubmission(context.Context, *
 }
 func (UnimplementedAutograderServiceServer) RegradeAssignment(context.Context, *RegradeAssignmentRequest) (*RegradeAssignmentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RegradeAssignment not implemented")
+}
+func (UnimplementedAutograderServiceServer) ChangeLeaderboardAnonymous(context.Context, *ChangeLeaderboardAnonymousRequest) (*ChangeLeaderboardAnonymousResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ChangeLeaderboardAnonymous not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1458,6 +1472,24 @@ func _AutograderService_RegradeAssignment_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_ChangeLeaderboardAnonymous_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChangeLeaderboardAnonymousRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).ChangeLeaderboardAnonymous(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/ChangeLeaderboardAnonymous",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).ChangeLeaderboardAnonymous(ctx, req.(*ChangeLeaderboardAnonymousRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1632,6 +1664,10 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RegradeAssignment",
 			Handler:    _AutograderService_RegradeAssignment_Handler,
+		},
+		{
+			MethodName: "ChangeLeaderboardAnonymous",
+			Handler:    _AutograderService_ChangeLeaderboardAnonymous_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

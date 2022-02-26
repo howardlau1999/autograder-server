@@ -98,6 +98,9 @@ message LeaderboardEntry {
   repeated LeaderboardItem items = 3;
   uint64 user_id = 4;
   google.protobuf.Timestamp submitted_at = 5;
+  string student_id = 6;
+  string username = 7;
+  string email = 8;
 }
 
 message SubmissionReportTestcase {
@@ -181,4 +184,16 @@ message VerificationCodeMetadata {
   string code = 1;
   google.protobuf.Timestamp issued_at = 2;
   google.protobuf.Timestamp expired_at = 3;
+}
+
+message ExportStatusMetadata {
+  enum Status {
+    Exporting = 0;
+    Exported = 1;
+    Failed = 2;
+    Cancelled = 3;
+  }
+  uint64 progress = 1;
+  uint64 total = 2;
+  google.protobuf.Timestamp created_at = 3;
 }

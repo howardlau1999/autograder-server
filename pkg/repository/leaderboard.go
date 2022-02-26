@@ -13,10 +13,28 @@ type LeaderboardRepository interface {
 	GetLeaderboardEntry(ctx context.Context, assignmentId, userId uint64) (*model_pb.LeaderboardEntry, error)
 	GetLeaderboard(ctx context.Context, assignmentId uint64) ([]*model_pb.LeaderboardEntry, error)
 	HasLeaderboard(ctx context.Context, assignmentId uint64) bool
+	SetLeaderboardAnonymous(ctx context.Context, assignmentId uint64, anonymous bool) error
+	GetLeaderboardAnonymous(ctx context.Context, assignmentId uint64) bool
 }
 
 type KVLeaderboardRepository struct {
 	db *pebble.DB
+}
+
+func (lr *KVLeaderboardRepository) SetLeaderboardAnonymous(ctx context.Context, assignmentId uint64, anonymous bool) error {
+	if anonymous {
+		return lr.db.Set(lr.getAnonymousMarker(assignmentId), nil, pebble.Sync)
+	}
+	return lr.db.Delete(lr.getAnonymousMarker(assignmentId), pebble.Sync)
+}
+
+func (lr *KVLeaderboardRepository) GetLeaderboardAnonymous(ctx context.Context, assignmentId uint64) bool {
+	_, closer, err := lr.db.Get(lr.getAnonymousMarker(assignmentId))
+	if err != nil {
+		return false
+	}
+	closer.Close()
+	return true
 }
 
 func (lr *KVLeaderboardRepository) GetLeaderboard(ctx context.Context, assignmentId uint64) ([]*model_pb.LeaderboardEntry, error) {
@@ -33,6 +51,10 @@ func (lr *KVLeaderboardRepository) GetLeaderboard(ctx context.Context, assignmen
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+func (lr *KVLeaderboardRepository) getAnonymousMarker(assignmentId uint64) []byte {
+	return []byte(fmt.Sprintf("leaderboard:anonymous:%d", assignmentId))
 }
 
 func (lr *KVLeaderboardRepository) getMarkerId(assignmentId uint64) []byte {
