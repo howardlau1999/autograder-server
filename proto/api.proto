@@ -71,6 +71,8 @@ message SubmissionInfo {
   message Submitter {
     uint64 user_id = 1;
     string username = 2;
+    string nickname = 3;
+    string student_id = 4;
   }
   repeated Submitter submitters = 3;
   uint64 score = 4;
@@ -543,6 +545,23 @@ message ChangeLeaderboardAnonymousResponse {
   bool anonymous = 1;
 }
 
+message ExportAssignmentGradesRequest {
+  uint64 assignment_id = 1;
+}
+
+message ExportAssignmentGradesResponse {
+  message Entry {
+    uint64 user_id = 1;
+    string username = 2;
+    string student_id = 3;
+    string nickname = 4;
+    uint64 score = 5;
+    uint64 max_score = 6;
+    uint64 submission_count = 7;
+  }
+  repeated Entry entries = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -588,4 +607,5 @@ service AutograderService {
    rpc RegradeSubmission(RegradeSubmissionRequest) returns (RegradeSubmissionResponse);
    rpc RegradeAssignment(RegradeAssignmentRequest) returns (RegradeAssignmentResponse);
    rpc ChangeLeaderboardAnonymous(ChangeLeaderboardAnonymousRequest) returns (ChangeLeaderboardAnonymousResponse);
+   rpc ExportAssignmentGrades(ExportAssignmentGradesRequest) returns (ExportAssignmentGradesResponse);
 }

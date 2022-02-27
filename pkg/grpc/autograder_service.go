@@ -878,8 +878,10 @@ func (a *AutograderService) getSubmissionHistory(ctx context.Context, userId, as
 				return nil, status.Error(codes.Internal, "GET_USER")
 			}
 			oneSubmitter := &autograder_pb.SubmissionInfo_Submitter{
-				UserId:   uid,
-				Username: user.Username,
+				UserId:    uid,
+				Username:  user.Username,
+				Nickname:  user.Nickname,
+				StudentId: user.StudentId,
 			}
 			submitters = append(submitters, oneSubmitter)
 		}
@@ -1534,6 +1536,43 @@ func (a *AutograderService) RegradeAssignment(ctx context.Context, request *auto
 func (a *AutograderService) ChangeLeaderboardAnonymous(ctx context.Context, request *autograder_pb.ChangeLeaderboardAnonymousRequest) (*autograder_pb.ChangeLeaderboardAnonymousResponse, error) {
 	a.leaderboardRepo.SetLeaderboardAnonymous(ctx, request.GetAssignmentId(), request.GetAnonymous())
 	return &autograder_pb.ChangeLeaderboardAnonymousResponse{Anonymous: request.Anonymous}, nil
+}
+
+func (a *AutograderService) ExportAssignmentGrades(ctx context.Context, request *autograder_pb.ExportAssignmentGradesRequest) (*autograder_pb.ExportAssignmentGradesResponse, error) {
+	courseId := ctx.Value(courseIdCtxKey{}).(uint64)
+	assignmentId := request.GetAssignmentId()
+	members, err := a.courseRepo.GetUsersByCourse(ctx, courseId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "GET_USERS")
+	}
+	var entries []*autograder_pb.ExportAssignmentGradesResponse_Entry
+	for _, member := range members {
+		userId := member.GetUserId()
+		dbUser, _ := a.userRepo.GetUserById(ctx, userId)
+		submissions, err := a.getSubmissionHistory(ctx, userId, assignmentId)
+		if err != nil {
+			continue
+		}
+		score := uint64(0)
+		maxScore := uint64(0)
+		for _, sub := range submissions {
+			if sub.Score > score {
+				score = sub.Score
+				maxScore = sub.MaxScore
+			}
+		}
+		entry := &autograder_pb.ExportAssignmentGradesResponse_Entry{
+			UserId:          userId,
+			Username:        dbUser.Username,
+			StudentId:       dbUser.StudentId,
+			Nickname:        dbUser.Nickname,
+			SubmissionCount: uint64(len(submissions)),
+			Score:           score,
+			MaxScore:        maxScore,
+		}
+		entries = append(entries, entry)
+	}
+	return &autograder_pb.ExportAssignmentGradesResponse{Entries: entries}, nil
 }
 
 func NewAutograderServiceServer(db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client, ghOauth2Config *oauth2.Config) *AutograderService {

@@ -276,6 +276,7 @@ func (a *AutograderService) initAuthFuncs() {
 				"RegradeSubmission",
 				"RegradeAssignment",
 				"ChangeLeaderboardAnonymous",
+				"ExportAssignmentGrades",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireCourseWrite},
 		},
