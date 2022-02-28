@@ -162,6 +162,7 @@ message UserTokenPayload {
   uint64 user_id = 1;
   string username = 2;
   string nickname = 3;
+  bool is_admin = 4;
 }
 
 message DownloadTokenPayload {
@@ -562,6 +563,26 @@ message ExportAssignmentGradesResponse {
   repeated Entry entries = 1;
 }
 
+message RemoveGraderRequest {
+  uint64 grader_id = 1;
+}
+
+message RemoveGraderResponse {
+  bool success = 1;
+}
+
+message GetAllGradersRequest {
+
+}
+
+message GetAllGradersResponse {
+  message Grader {
+    uint64 grader_id = 1;
+    GraderStatusMetadata metadata = 2;
+  }
+  repeated Grader graders = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -608,4 +629,6 @@ service AutograderService {
    rpc RegradeAssignment(RegradeAssignmentRequest) returns (RegradeAssignmentResponse);
    rpc ChangeLeaderboardAnonymous(ChangeLeaderboardAnonymousRequest) returns (ChangeLeaderboardAnonymousResponse);
    rpc ExportAssignmentGrades(ExportAssignmentGradesRequest) returns (ExportAssignmentGradesResponse);
+   rpc RemoveGrader(RemoveGraderRequest) returns (RemoveGraderResponse);
+   rpc GetAllGraders(GetAllGradersRequest) returns (GetAllGradersResponse);
 }

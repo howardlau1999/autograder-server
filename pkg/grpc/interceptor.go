@@ -1,10 +1,12 @@
 package grpc
 
 import (
-	autograder_pb "autograder-server/pkg/api/proto"
-	model_pb "autograder-server/pkg/model/proto"
 	"context"
 	"fmt"
+	"time"
+
+	autograder_pb "autograder-server/pkg/api/proto"
+	model_pb "autograder-server/pkg/model/proto"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/auth"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -14,7 +16,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"time"
 )
 
 const ServerPrefix = "/AutograderService/"
@@ -102,7 +103,9 @@ func (a *AutograderService) RequireLogin(ctx context.Context, req interface{}) (
 	return context.WithValue(ctx, userInfoCtxKey{}, payloadPB), nil
 }
 
-func (a *AutograderService) getCourseIdFromAssignmentId(ctx context.Context, assignmentId uint64) (uint64, *model_pb.Assignment, error) {
+func (a *AutograderService) getCourseIdFromAssignmentId(ctx context.Context, assignmentId uint64) (
+	uint64, *model_pb.Assignment, error,
+) {
 	assignment, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
 	if err != nil {
 		return 0, assignment, status.Error(codes.NotFound, "INVALID_ASSIGNMENT_ID")
@@ -110,7 +113,9 @@ func (a *AutograderService) getCourseIdFromAssignmentId(ctx context.Context, ass
 	return assignment.GetCourseId(), assignment, nil
 }
 
-func (a *AutograderService) getAssignmentIdFromSubmissionId(ctx context.Context, submissionId uint64) (uint64, *model_pb.Submission, error) {
+func (a *AutograderService) getAssignmentIdFromSubmissionId(ctx context.Context, submissionId uint64) (
+	uint64, *model_pb.Submission, error,
+) {
 	submission, err := a.submissionRepo.GetSubmission(ctx, submissionId)
 	if err != nil {
 		return 0, submission, status.Error(codes.NotFound, "INVALID_SUBMISSION_ID")
@@ -293,7 +298,9 @@ func (a *AutograderService) initAuthFuncs() {
 			Methods: []string{
 				"ActivateSubmission",
 			},
-			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireSubmissionRead, a.NotAfterDueDate},
+			AuthFuncs: []MethodAuthFunc{
+				a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireSubmissionRead, a.NotAfterDueDate,
+			},
 		},
 	}
 
@@ -304,7 +311,9 @@ func (a *AutograderService) initAuthFuncs() {
 	}
 }
 
-func (a *AutograderService) AuthFunc(ctx context.Context, req interface{}, fullMethodName string) (context.Context, error) {
+func (a *AutograderService) AuthFunc(ctx context.Context, req interface{}, fullMethodName string) (
+	context.Context, error,
+) {
 	authFuncs := a.authFuncs[fullMethodName]
 	if authFuncs == nil {
 		return ctx, status.Error(codes.NotFound, "METHOD_AUTH")
@@ -320,7 +329,9 @@ func (a *AutograderService) AuthFunc(ctx context.Context, req interface{}, fullM
 }
 
 func UnaryAuth() grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(
+		ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
+	) (interface{}, error) {
 		srv := info.Server.(ServiceAuthFunc)
 		var err error
 		ctx, err = srv.AuthFunc(ctx, req, info.FullMethod)

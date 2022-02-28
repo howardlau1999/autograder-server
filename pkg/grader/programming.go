@@ -1,10 +1,18 @@
 package grader
 
 import (
-	model_pb "autograder-server/pkg/model/proto"
-	"autograder-server/pkg/repository"
 	"context"
 	"fmt"
+	"io/ioutil"
+	"math"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	autograder_grpc "autograder-server/pkg/grader/grpc"
+	grader_pb "autograder-server/pkg/grader/proto"
+	model_pb "autograder-server/pkg/model/proto"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -12,25 +20,43 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/spf13/viper"
 	"google.golang.org/grpc/grpclog"
 	"google.golang.org/protobuf/encoding/protojson"
-	"io/ioutil"
-	"math"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
 )
 
 type ProgrammingGrader interface {
 	PullImage(image string) error
-	GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig, notifyC chan *GradeFinished)
+	GradeSubmission(
+		submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig,
+		notifyC chan *grader_pb.GradeReport,
+	)
+}
+
+type HubGrader struct {
+	hub *autograder_grpc.GraderHubService
+}
+
+func (h *HubGrader) PullImage(image string) error {
+	return nil
+}
+
+func (h *HubGrader) GradeSubmission(
+	submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig,
+	notifyC chan *grader_pb.GradeReport,
+) {
+	request := &grader_pb.GradeRequest{
+		SubmissionId: submissionId,
+		Submission:   submission,
+		Config:       config,
+	}
+	h.hub.Grade(context.Background(), request)
+	if notifyC != nil {
+		h.hub.SubscribeSubmission(submissionId, notifyC)
+	}
 }
 
 type DockerProgrammingGrader struct {
 	cli         *client.Client
-	srr         repository.SubmissionReportRepository
 	concurrency int
 	running     int
 	mu          *sync.Mutex
@@ -55,11 +81,16 @@ func (d *DockerProgrammingGrader) PullImage(image string) error {
 	return err
 }
 
-func (d *DockerProgrammingGrader) runDocker(ctx context.Context, submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig) (internalError int64, exitCode int64, resultsJSONPath string) {
-	imgs, err := d.cli.ImageList(ctx, types.ImageListOptions{
-		All:     false,
-		Filters: filters.NewArgs(filters.Arg("reference", fmt.Sprintf("%s", config.Image))),
-	})
+func (d *DockerProgrammingGrader) runDocker(
+	ctx context.Context, submissionId uint64, submission *model_pb.Submission,
+	config *model_pb.ProgrammingAssignmentConfig,
+) (internalError int64, exitCode int64, resultsJSONPath string) {
+	imgs, err := d.cli.ImageList(
+		ctx, types.ImageListOptions{
+			All:     false,
+			Filters: filters.NewArgs(filters.Arg("reference", fmt.Sprintf("%s", config.Image))),
+		},
+	)
 	if err != nil {
 		internalError = -1
 		grpclog.Errorf("failed to list image for %d: %v", submissionId, err)
@@ -89,10 +120,12 @@ func (d *DockerProgrammingGrader) runDocker(ctx context.Context, submissionId ui
 		OpenStdin:    true,
 		StdinOnce:    false,
 		Env:          nil,
-		Entrypoint:   []string{"sh", "-c", "/autograder/run > /autograder/results/stdout 2> /autograder/results/stderr"},
-		Image:        config.Image,
-		Volumes:      nil,
-		WorkingDir:   "/autograder",
+		Entrypoint: []string{
+			"sh", "-c", "/autograder/run > /autograder/results/stdout 2> /autograder/results/stderr",
+		},
+		Image:      config.Image,
+		Volumes:    nil,
+		WorkingDir: "/autograder",
 	}
 	cwd, _ := os.Getwd()
 	runDir := filepath.Join(cwd, fmt.Sprintf("runs/submissions/%d", submissionId))
@@ -166,12 +199,10 @@ func (d *DockerProgrammingGrader) runDocker(ctx context.Context, submissionId ui
 	return
 }
 
-type GradeFinished struct {
-	Report      *model_pb.SubmissionReport
-	BriefReport *model_pb.SubmissionBriefReport
-}
-
-func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig, notifyC chan *GradeFinished) {
+func (d *DockerProgrammingGrader) GradeSubmission(
+	submissionId uint64, submission *model_pb.Submission,
+	config *model_pb.ProgrammingAssignmentConfig, notifyC chan *grader_pb.GradeReport,
+) {
 	d.mu.Lock()
 	for d.running >= d.concurrency {
 		d.cond.Wait()
@@ -188,10 +219,9 @@ func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submissio
 		Status: model_pb.SubmissionStatus_Running,
 	}
 	if notifyC != nil {
-		go func() { notifyC <- &GradeFinished{BriefReport: briefPB} }()
+		go func() { notifyC <- &grader_pb.GradeReport{Brief: briefPB} }()
 	}
 	ctx := context.Background()
-	_ = d.srr.UpdateSubmissionBriefReport(ctx, submissionId, briefPB)
 	internalError, exitCode, resultsJSONPath := d.runDocker(ctx, submissionId, submission, config)
 	resultsPB := &model_pb.SubmissionReport{}
 	var json []byte
@@ -229,10 +259,6 @@ func (d *DockerProgrammingGrader) GradeSubmission(submissionId uint64, submissio
 WriteReport:
 	resultsPB.InternalError = internalError
 	resultsPB.ExitCode = exitCode
-	err = d.srr.UpdateSubmissionReport(ctx, submissionId, resultsPB)
-	if err != nil {
-		grpclog.Errorf("failed to update submission report for %d: %v", submissionId, err)
-	}
 	briefPB = &model_pb.SubmissionBriefReport{
 		Score:         resultsPB.Score,
 		MaxScore:      resultsPB.MaxScore,
@@ -243,25 +269,25 @@ WriteReport:
 	if internalError != 0 {
 		briefPB.Status = model_pb.SubmissionStatus_Failed
 	}
-	err = d.srr.UpdateSubmissionBriefReport(ctx, submissionId, briefPB)
-	if err != nil {
-		grpclog.Errorf("failed to update submission brief report for %d: %v", submissionId, err)
-	}
-	_ = d.srr.DeleteUnfinishedSubmission(ctx, submissionId)
 	if notifyC != nil {
-		notifyC <- &GradeFinished{
-			Report:      resultsPB,
-			BriefReport: briefPB,
+		notifyC <- &grader_pb.GradeReport{
+			Report: resultsPB,
+			Brief:  briefPB,
 		}
+		close(notifyC)
 	}
 }
 
-func NewDockerProgrammingGrader(srr repository.SubmissionReportRepository) ProgrammingGrader {
+func NewDockerProgrammingGrader(concurrency int) ProgrammingGrader {
 	mu := &sync.Mutex{}
 	cond := sync.NewCond(mu)
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		panic(err)
 	}
-	return &DockerProgrammingGrader{cli: cli, srr: srr, mu: mu, cond: cond, concurrency: viper.GetInt("grader.concurrency")}
+	return &DockerProgrammingGrader{cli: cli, mu: mu, cond: cond, concurrency: concurrency}
+}
+
+func NewHubGrader(svc *autograder_grpc.GraderHubService) ProgrammingGrader {
+	return &HubGrader{hub: svc}
 }

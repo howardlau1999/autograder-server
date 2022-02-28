@@ -1,7 +1,23 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"fmt"
+	"html/template"
+	"io"
+	"io/fs"
+	"log"
+	"math/rand"
+	"net"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
 	autograder_pb "autograder-server/pkg/api/proto"
+	grader_grpc "autograder-server/pkg/grader/grpc"
+	grader_pb "autograder-server/pkg/grader/proto"
 	autograder_grpc "autograder-server/pkg/grpc"
 	"autograder-server/pkg/mailer"
 	"autograder-server/pkg/middleware"
@@ -9,9 +25,6 @@ import (
 	"autograder-server/pkg/repository"
 	"autograder-server/pkg/storage"
 	"autograder-server/pkg/web"
-	"bytes"
-	"context"
-	"fmt"
 	"github.com/cockroachdb/pebble"
 	"github.com/go-chi/chi"
 	chiMiddleware "github.com/go-chi/chi/middleware"
@@ -34,15 +47,6 @@ import (
 	"golang.org/x/oauth2/github"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
-	"html/template"
-	"io"
-	"io/fs"
-	"log"
-	"math/rand"
-	"net/http"
-	"os"
-	"strings"
-	"time"
 )
 
 var (
@@ -204,22 +208,25 @@ func main() {
 		Endpoint:     github.Endpoint,
 	}
 
-	corsHandler := cors.New(cors.Options{
-		AllowOriginFunc: func(origin string) bool {
-			return true
+	corsHandler := cors.New(
+		cors.Options{
+			AllowOriginFunc: func(origin string) bool {
+				return true
+			},
+			AllowedHeaders:   []string{"Upload-token", "Download-token"},
+			ExposedHeaders:   nil,  // make sure that this is *nil*, otherwise the WebResponse overwrite will not work.
+			AllowCredentials: true, // always allow credentials, otherwise :authorization headers won't work
+			MaxAge:           int(10 * time.Minute / time.Second),
 		},
-		AllowedHeaders:   []string{"Upload-token", "Download-token"},
-		ExposedHeaders:   nil,  // make sure that this is *nil*, otherwise the WebResponse overwrite will not work.
-		AllowCredentials: true, // always allow credentials, otherwise :authorization headers won't work
-		MaxAge:           int(10 * time.Minute / time.Second),
-	})
+	)
 	zapLogger, err = zap.NewDevelopment()
 	if err != nil {
 		panic(err)
 	}
+	zap.ReplaceGlobals(zapLogger)
 	defer zapLogger.Sync()
 	grpc_zap.ReplaceGrpcLoggerV2(zapLogger)
-	grpcServer := grpc.NewServer(
+	autograderServer := grpc.NewServer(
 		grpc_middleware.WithUnaryServerChain(
 			grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
 			grpc_opentracing.UnaryServerInterceptor(),
@@ -237,13 +244,40 @@ func main() {
 			grpc_recovery.StreamServerInterceptor(),
 		),
 	)
-	autograderService := autograder_grpc.NewAutograderServiceServer(db, ls, m, hcaptchaClient, githubOauth2Config)
-	autograder_pb.RegisterAutograderServiceServer(grpcServer, autograderService)
-	wrappedGrpc := grpcweb.WrapServer(grpcServer, grpcweb.WithOriginFunc(func(origin string) bool {
-		return true
-	}), grpcweb.WithWebsockets(true), grpcweb.WithWebsocketOriginFunc(func(r *http.Request) bool {
-		return true
-	}))
+	graderHubServer := grpc.NewServer(
+		grpc_middleware.WithUnaryServerChain(
+			grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
+			grpc_opentracing.UnaryServerInterceptor(),
+			grpc_prometheus.UnaryServerInterceptor,
+			grpc_zap.UnaryServerInterceptor(zapLogger),
+			grpc_recovery.UnaryServerInterceptor(),
+		),
+		grpc_middleware.WithStreamServerChain(
+			grpc_ctxtags.StreamServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
+			grpc_opentracing.StreamServerInterceptor(),
+			grpc_prometheus.StreamServerInterceptor,
+			grpc_zap.StreamServerInterceptor(zapLogger),
+			grpc_recovery.StreamServerInterceptor(),
+		),
+	)
+	srr := repository.NewKVSubmissionReportRepository(db)
+	graderHubService := grader_grpc.NewGraderHubService(db, srr)
+	autograderService := autograder_grpc.NewAutograderServiceServer(
+		db, ls, m, hcaptchaClient, githubOauth2Config, srr, graderHubService,
+	)
+	autograder_pb.RegisterAutograderServiceServer(autograderServer, autograderService)
+	grader_pb.RegisterGraderHubServiceServer(graderHubServer, graderHubService)
+	wrappedGrpc := grpcweb.WrapServer(
+		autograderServer, grpcweb.WithOriginFunc(
+			func(origin string) bool {
+				return true
+			},
+		), grpcweb.WithWebsockets(true), grpcweb.WithWebsocketOriginFunc(
+			func(r *http.Request) bool {
+				return true
+			},
+		),
+	)
 	router := chi.NewRouter()
 	router.Use(
 		chiMiddleware.RealIP,
@@ -253,9 +287,18 @@ func main() {
 		middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler,
 	)
 	router.Get("/metrics", promhttp.Handler().ServeHTTP)
-	router.Options("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP)
-	router.Post("/AutograderService/FileUpload", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileUpload)).ServeHTTP)
-	router.Get("/AutograderService/FileDownload/{filename}", corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileDownload)).ServeHTTP)
+	router.Options(
+		"/AutograderService/FileUpload",
+		corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP,
+	)
+	router.Post(
+		"/AutograderService/FileUpload",
+		corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileUpload)).ServeHTTP,
+	)
+	router.Get(
+		"/AutograderService/FileDownload/{filename}",
+		corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileDownload)).ServeHTTP,
+	)
 	providedTokens := &ServerProvidedTokens{
 		ServerProvided:  "true",
 		HcaptchaSiteKey: viper.GetString("hcaptcha.site-key"),
@@ -272,23 +315,36 @@ func main() {
 	}
 	fsrv := http.FileServer(http.FS(distFS))
 
-	router.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Path
-		if len(r.URL.Path) > 1 {
-			p = r.URL.Path[1:]
-		}
-		_, err := distFS.Open(p)
+	router.Handle(
+		"/*", http.HandlerFunc(
+			func(w http.ResponseWriter, r *http.Request) {
+				p := r.URL.Path
+				if len(r.URL.Path) > 1 {
+					p = r.URL.Path[1:]
+				}
+				_, err := distFS.Open(p)
+				if err != nil {
+					if writeTemplate != nil {
+						writeTemplate(w, r)
+						return
+					}
+					http.StripPrefix(r.URL.Path, fsrv).ServeHTTP(w, r)
+				} else {
+					fsrv.ServeHTTP(w, r)
+				}
+			},
+		),
+	)
+	graderHubLis, err := net.Listen("tcp", ":9999")
+	if err != nil {
+		panic(err)
+	}
+	go func() {
+		err := graderHubServer.Serve(graderHubLis)
 		if err != nil {
-			if writeTemplate != nil {
-				writeTemplate(w, r)
-				return
-			}
-			http.StripPrefix(r.URL.Path, fsrv).ServeHTTP(w, r)
-		} else {
-			fsrv.ServeHTTP(w, r)
+			panic(err)
 		}
-	}))
-
+	}()
 	grpclog.Infof("Server listening on port %d. Open http://localhost:%d", port, port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), router); err != nil {
 		grpclog.Fatalf("Failed starting http2 server: %v", err)

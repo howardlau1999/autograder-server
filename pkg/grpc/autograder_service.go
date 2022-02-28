@@ -2,16 +2,31 @@ package grpc
 
 import (
 	"archive/zip"
+	"context"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"math/rand"
+	"net/http"
+	"net/mail"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
 	autograder_pb "autograder-server/pkg/api/proto"
 	"autograder-server/pkg/grader"
+	grader_grpc "autograder-server/pkg/grader/grpc"
+	grader_pb "autograder-server/pkg/grader/proto"
 	"autograder-server/pkg/mailer"
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/repository"
 	"autograder-server/pkg/storage"
 	"autograder-server/pkg/utils"
-	"context"
-	"encoding/base64"
-	"fmt"
 	"github.com/avast/retry-go"
 	"github.com/cockroachdb/pebble"
 	"github.com/go-chi/chi"
@@ -31,18 +46,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"io"
-	"math/rand"
-	"net/http"
-	"net/mail"
-	"os"
-	"path"
-	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
-	"sync"
-	"time"
 )
 
 type AutograderService struct {
@@ -59,10 +62,11 @@ type AutograderService struct {
 	mailer               mailer.Mailer
 	ls                   *storage.LocalStorage
 	captchaVerifier      *hcaptcha.Client
-	reportSubs           map[uint64][]chan *grader.GradeFinished
+	reportSubs           map[uint64][]chan *grader_pb.GradeReport
 	subsMu               *sync.Mutex
 	authFuncs            map[string][]MethodAuthFunc
 	githubOAuth2Config   *oauth2.Config
+	graderHubSvc         *grader_grpc.GraderHubService
 }
 
 var DownloadJWTSignKey = []byte("download-token-sign-key")
@@ -97,11 +101,15 @@ func (a *AutograderService) validateEmailCode(ctx context.Context, typ, email, c
 	return nil
 }
 
-func (a *AutograderService) CanWriteCourse(ctx context.Context, request *autograder_pb.CanWriteCourseRequest) (*autograder_pb.CanWriteCourseResponse, error) {
+func (a *AutograderService) CanWriteCourse(
+	ctx context.Context, request *autograder_pb.CanWriteCourseRequest,
+) (*autograder_pb.CanWriteCourseResponse, error) {
 	return &autograder_pb.CanWriteCourseResponse{WritePermission: true}, nil
 }
 
-func (a *AutograderService) ResetPassword(ctx context.Context, request *autograder_pb.ResetPasswordRequest) (*autograder_pb.ResetPasswordResponse, error) {
+func (a *AutograderService) ResetPassword(
+	ctx context.Context, request *autograder_pb.ResetPasswordRequest,
+) (*autograder_pb.ResetPasswordResponse, error) {
 	l := ctxzap.Extract(ctx)
 	email := request.GetEmail()
 	code := request.GetCode()
@@ -154,13 +162,15 @@ func (a *AutograderService) requestEmailCode(ctx context.Context, subject, email
 		return
 	}
 	go func() {
-		err := retry.Do(func() error {
-			err := a.sendEmailCode(email, subject, code, template)
-			if err == nil {
-				l.Debug("RequestEmailCode.MailSent")
-			}
-			return err
-		}, retry.Attempts(3))
+		err := retry.Do(
+			func() error {
+				err := a.sendEmailCode(email, subject, code, template)
+				if err == nil {
+					l.Debug("RequestEmailCode.MailSent")
+				}
+				return err
+			}, retry.Attempts(3),
+		)
 		if err != nil {
 			l.Error("RequestEmailCode.SendMail", zap.Error(err))
 		}
@@ -185,7 +195,9 @@ func (a *AutograderService) validateUsernameAndEmail(ctx context.Context, userna
 	return nil
 }
 
-func (a *AutograderService) signUpNewUser(ctx context.Context, email, username string, password string) (uint64, error) {
+func (a *AutograderService) signUpNewUser(ctx context.Context, email, username string, password string) (
+	uint64, error,
+) {
 	l := ctxzap.Extract(ctx)
 	if err := a.validateUsernameAndEmail(ctx, username, email); err != nil {
 		return 0, err
@@ -213,7 +225,9 @@ func (a *AutograderService) signUpNewUser(ctx context.Context, email, username s
 	return userId, nil
 }
 
-func (a *AutograderService) SignUp(ctx context.Context, request *autograder_pb.SignUpRequest) (*autograder_pb.SignUpResponse, error) {
+func (a *AutograderService) SignUp(
+	ctx context.Context, request *autograder_pb.SignUpRequest,
+) (*autograder_pb.SignUpResponse, error) {
 	if err := a.validateEmailCode(ctx, SignUpRepoType, request.GetEmail(), request.GetCode()); err != nil {
 		return nil, err
 	}
@@ -227,7 +241,9 @@ func (a *AutograderService) SignUp(ctx context.Context, request *autograder_pb.S
 	return &autograder_pb.SignUpResponse{UserId: userId}, nil
 }
 
-func (a *AutograderService) RequestSignUpToken(ctx context.Context, request *autograder_pb.RequestSignUpTokenRequest) (*autograder_pb.RequestSignUpTokenResponse, error) {
+func (a *AutograderService) RequestSignUpToken(
+	ctx context.Context, request *autograder_pb.RequestSignUpTokenRequest,
+) (*autograder_pb.RequestSignUpTokenResponse, error) {
 	if err := a.validateUsernameAndEmail(ctx, request.GetUsername(), request.GetEmail()); err != nil {
 		return nil, err
 	}
@@ -235,7 +251,9 @@ func (a *AutograderService) RequestSignUpToken(ctx context.Context, request *aut
 	return &autograder_pb.RequestSignUpTokenResponse{}, nil
 }
 
-func (a *AutograderService) RequestPasswordReset(ctx context.Context, request *autograder_pb.RequestPasswordResetRequest) (*autograder_pb.RequestPasswordResetResponse, error) {
+func (a *AutograderService) RequestPasswordReset(
+	ctx context.Context, request *autograder_pb.RequestPasswordResetRequest,
+) (*autograder_pb.RequestPasswordResetResponse, error) {
 	l := ctxzap.Extract(ctx)
 	email := request.GetEmail()
 	userId, _ := a.userRepo.GetUserIdByEmail(ctx, email)
@@ -247,7 +265,9 @@ func (a *AutograderService) RequestPasswordReset(ctx context.Context, request *a
 	return &autograder_pb.RequestPasswordResetResponse{}, nil
 }
 
-func (a *AutograderService) UpdateCourseMember(ctx context.Context, request *autograder_pb.UpdateCourseMemberRequest) (*autograder_pb.UpdateCourseMemberResponse, error) {
+func (a *AutograderService) UpdateCourseMember(
+	ctx context.Context, request *autograder_pb.UpdateCourseMemberRequest,
+) (*autograder_pb.UpdateCourseMemberResponse, error) {
 	courseId := request.GetCourseId()
 	member := request.GetMember()
 	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId), zap.Uint64("userId", member.GetUserId()))
@@ -270,7 +290,9 @@ func (a *AutograderService) UpdateCourseMember(ctx context.Context, request *aut
 	return &autograder_pb.UpdateCourseMemberResponse{}, nil
 }
 
-func (a *AutograderService) UpdateCourse(ctx context.Context, request *autograder_pb.UpdateCourseRequest) (*autograder_pb.UpdateCourseResponse, error) {
+func (a *AutograderService) UpdateCourse(
+	ctx context.Context, request *autograder_pb.UpdateCourseRequest,
+) (*autograder_pb.UpdateCourseResponse, error) {
 	courseId := request.GetCourseId()
 
 	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId))
@@ -290,7 +312,9 @@ func (a *AutograderService) UpdateCourse(ctx context.Context, request *autograde
 	return &autograder_pb.UpdateCourseResponse{}, nil
 }
 
-func (a *AutograderService) UpdateAssignment(ctx context.Context, request *autograder_pb.UpdateAssignmentRequest) (*autograder_pb.UpdateAssignmentResponse, error) {
+func (a *AutograderService) UpdateAssignment(
+	ctx context.Context, request *autograder_pb.UpdateAssignmentRequest,
+) (*autograder_pb.UpdateAssignmentResponse, error) {
 	assignmentId := request.GetAssignmentId()
 	assignment := request.GetAssignment()
 	l := ctxzap.Extract(ctx).With(zap.Uint64("assignmentId", assignmentId))
@@ -308,7 +332,9 @@ func (a *AutograderService) UpdateAssignment(ctx context.Context, request *autog
 	return &autograder_pb.UpdateAssignmentResponse{}, nil
 }
 
-func (a *AutograderService) AddCourseMembers(ctx context.Context, request *autograder_pb.AddCourseMembersRequest) (*autograder_pb.AddCourseMembersResponse, error) {
+func (a *AutograderService) AddCourseMembers(
+	ctx context.Context, request *autograder_pb.AddCourseMembersRequest,
+) (*autograder_pb.AddCourseMembersResponse, error) {
 	courseId := request.GetCourseId()
 	membersToAdd := request.GetMembers()
 	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId))
@@ -316,7 +342,10 @@ func (a *AutograderService) AddCourseMembers(ctx context.Context, request *autog
 	for _, memberToAdd := range membersToAdd {
 		var err error
 		userId, _ := a.userRepo.GetUserIdByEmail(ctx, memberToAdd.GetEmail())
-		l.Debug("AddCourseMember.GetUserIdByEmail", zap.Uint64("userId", userId), zap.String("email", memberToAdd.GetEmail()))
+		l.Debug(
+			"AddCourseMember.GetUserIdByEmail", zap.Uint64("userId", userId),
+			zap.String("email", memberToAdd.GetEmail()),
+		)
 		if userId == 0 {
 			newUsername := memberToAdd.GetName()
 			if len(newUsername) < 3 {
@@ -328,7 +357,10 @@ func (a *AutograderService) AddCourseMembers(ctx context.Context, request *autog
 			}
 			newUser := &model_pb.User{Email: memberToAdd.GetEmail(), Username: newUsername, Nickname: newUsername}
 			userId, err = a.userRepo.CreateUser(ctx, newUser)
-			l.Debug("AddCourseMember.CreateUser", zap.String("email", memberToAdd.GetEmail()), zap.String("username", newUsername), zap.Uint64("userId", userId))
+			l.Debug(
+				"AddCourseMember.CreateUser", zap.String("email", memberToAdd.GetEmail()),
+				zap.String("username", newUsername), zap.Uint64("userId", userId),
+			)
 			if err != nil {
 				l.Error("AddCourseMember.CreateUser", zap.Error(err))
 				continue
@@ -360,7 +392,9 @@ func (a *AutograderService) AddCourseMembers(ctx context.Context, request *autog
 	return resp, nil
 }
 
-func (a *AutograderService) RemoveCourseMembers(ctx context.Context, request *autograder_pb.RemoveCourseMembersRequest) (*autograder_pb.RemoveCourseMembersResponse, error) {
+func (a *AutograderService) RemoveCourseMembers(
+	ctx context.Context, request *autograder_pb.RemoveCourseMembersRequest,
+) (*autograder_pb.RemoveCourseMembersResponse, error) {
 	currentUserId := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload).GetUserId()
 	membersToRemove := request.GetUserIds()
 	courseId := request.GetCourseId()
@@ -385,7 +419,9 @@ func (a *AutograderService) RemoveCourseMembers(ctx context.Context, request *au
 	return resp, nil
 }
 
-func (a *AutograderService) GetCourseMembers(ctx context.Context, request *autograder_pb.GetCourseMembersRequest) (*autograder_pb.GetCourseMembersResponse, error) {
+func (a *AutograderService) GetCourseMembers(
+	ctx context.Context, request *autograder_pb.GetCourseMembersRequest,
+) (*autograder_pb.GetCourseMembersResponse, error) {
 	l := ctxzap.Extract(ctx)
 	courseId := request.GetCourseId()
 	members, err := a.courseRepo.GetUsersByCourse(ctx, request.GetCourseId())
@@ -401,21 +437,25 @@ func (a *AutograderService) GetCourseMembers(ctx context.Context, request *autog
 		if err != nil {
 			l.Error("GetCourseMembers.GetUserById", zap.Uint64("userId", userId), zap.Error(err))
 		}
-		respMembers = append(respMembers, &autograder_pb.GetCourseMembersResponse_MemberInfo{
-			Username:  user.GetUsername(),
-			UserId:    userId,
-			Role:      member.GetRole(),
-			Email:     user.GetEmail(),
-			Nickname:  user.GetNickname(),
-			StudentId: user.GetStudentId(),
-			GithubId:  user.GetGithubId(),
-		})
+		respMembers = append(
+			respMembers, &autograder_pb.GetCourseMembersResponse_MemberInfo{
+				Username:  user.GetUsername(),
+				UserId:    userId,
+				Role:      member.GetRole(),
+				Email:     user.GetEmail(),
+				Nickname:  user.GetNickname(),
+				StudentId: user.GetStudentId(),
+				GithubId:  user.GetGithubId(),
+			},
+		)
 	}
 	resp.Members = respMembers
 	return resp, nil
 }
 
-func (a *AutograderService) InitDownload(ctx context.Context, request *autograder_pb.InitDownloadRequest) (*autograder_pb.InitDownloadResponse, error) {
+func (a *AutograderService) InitDownload(
+	ctx context.Context, request *autograder_pb.InitDownloadRequest,
+) (*autograder_pb.InitDownloadResponse, error) {
 	sub := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	if request.GetIsDirectory() {
 		fn := fmt.Sprintf("submission_%d.zip", request.GetSubmissionId())
@@ -473,7 +513,9 @@ func (a *AutograderService) getManifestPath(manifestId uint64) string {
 	return fmt.Sprintf("uploads/manifests/%d", manifestId)
 }
 
-func (a *AutograderService) DeleteFileInManifest(ctx context.Context, request *autograder_pb.DeleteFileInManifestRequest) (*autograder_pb.DeleteFileInManifestResponse, error) {
+func (a *AutograderService) DeleteFileInManifest(
+	ctx context.Context, request *autograder_pb.DeleteFileInManifestRequest,
+) (*autograder_pb.DeleteFileInManifestResponse, error) {
 	filename := request.GetFilename()
 	if isFilenameInvalid(filename) {
 		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
@@ -494,7 +536,9 @@ func (a *AutograderService) pullImage(image string) {
 	}
 }
 
-func (a *AutograderService) CreateAssignment(ctx context.Context, request *autograder_pb.CreateAssignmentRequest) (*autograder_pb.CreateAssignmentResponse, error) {
+func (a *AutograderService) CreateAssignment(
+	ctx context.Context, request *autograder_pb.CreateAssignmentRequest,
+) (*autograder_pb.CreateAssignmentResponse, error) {
 	resp := &autograder_pb.CreateAssignmentResponse{}
 	assignment := &model_pb.Assignment{}
 	assignment.Name = request.GetName()
@@ -527,7 +571,9 @@ func (a *AutograderService) CreateAssignment(ctx context.Context, request *autog
 	return resp, nil
 }
 
-func (a *AutograderService) CreateCourse(ctx context.Context, request *autograder_pb.CreateCourseRequest) (*autograder_pb.CreateCourseResponse, error) {
+func (a *AutograderService) CreateCourse(
+	ctx context.Context, request *autograder_pb.CreateCourseRequest,
+) (*autograder_pb.CreateCourseResponse, error) {
 	l := ctxzap.Extract(ctx)
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	resp := &autograder_pb.CreateCourseResponse{}
@@ -576,14 +622,18 @@ func (a *AutograderService) CreateCourse(ctx context.Context, request *autograde
 	return resp, nil
 }
 
-func (a *AutograderService) HasLeaderboard(ctx context.Context, request *autograder_pb.HasLeaderboardRequest) (*autograder_pb.HasLeaderboardResponse, error) {
+func (a *AutograderService) HasLeaderboard(
+	ctx context.Context, request *autograder_pb.HasLeaderboardRequest,
+) (*autograder_pb.HasLeaderboardResponse, error) {
 	resp := &autograder_pb.HasLeaderboardResponse{
 		HasLeaderboard: a.leaderboardRepo.HasLeaderboard(ctx, request.GetAssignmentId()),
 	}
 	return resp, nil
 }
 
-func (a *AutograderService) GetLeaderboard(ctx context.Context, request *autograder_pb.GetLeaderboardRequest) (*autograder_pb.GetLeaderboardResponse, error) {
+func (a *AutograderService) GetLeaderboard(
+	ctx context.Context, request *autograder_pb.GetLeaderboardRequest,
+) (*autograder_pb.GetLeaderboardResponse, error) {
 	entries, err := a.leaderboardRepo.GetLeaderboard(ctx, request.GetAssignmentId())
 	anonymous := a.leaderboardRepo.GetLeaderboardAnonymous(ctx, request.GetAssignmentId())
 	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
@@ -596,7 +646,9 @@ func (a *AutograderService) GetLeaderboard(ctx context.Context, request *autogra
 			}
 			entry.UserId = 0
 		}
-		resp := &autograder_pb.GetLeaderboardResponse{Entries: entries, Anonymous: anonymous, Full: full, Role: member.GetRole()}
+		resp := &autograder_pb.GetLeaderboardResponse{
+			Entries: entries, Anonymous: anonymous, Full: full, Role: member.GetRole(),
+		}
 		return resp, err
 	}
 	for _, entry := range entries {
@@ -615,7 +667,9 @@ func (a *AutograderService) GetLeaderboard(ctx context.Context, request *autogra
 			entry.Email = dbUser.Email
 		}
 	}
-	resp := &autograder_pb.GetLeaderboardResponse{Entries: entries, Anonymous: anonymous, Full: full, Role: member.GetRole()}
+	resp := &autograder_pb.GetLeaderboardResponse{
+		Entries: entries, Anonymous: anonymous, Full: full, Role: member.GetRole(),
+	}
 	return resp, err
 }
 
@@ -635,7 +689,9 @@ func walkDir(dirpath string, relpath string, node *autograder_pb.FileTreeNode) e
 			nodeType = autograder_pb.FileTreeNode_Folder
 		}
 		p := path.Join(relpath, dir.Name())
-		node.Children = append(node.Children, &autograder_pb.FileTreeNode{Name: dir.Name(), NodeType: nodeType, Path: p})
+		node.Children = append(
+			node.Children, &autograder_pb.FileTreeNode{Name: dir.Name(), NodeType: nodeType, Path: p},
+		)
 		child := node.Children[len(node.Children)-1]
 		if dir.IsDir() {
 			err = walkDir(filepath.Join(dirpath, dir.Name()), p, child)
@@ -647,7 +703,9 @@ func walkDir(dirpath string, relpath string, node *autograder_pb.FileTreeNode) e
 	return nil
 }
 
-func (a *AutograderService) GetFilesInSubmission(ctx context.Context, request *autograder_pb.GetFilesInSubmissionRequest) (*autograder_pb.GetFilesInSubmissionResponse, error) {
+func (a *AutograderService) GetFilesInSubmission(
+	ctx context.Context, request *autograder_pb.GetFilesInSubmissionRequest,
+) (*autograder_pb.GetFilesInSubmissionResponse, error) {
 	submission := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	subDir := submission.GetPath()
 	l := ctxzap.Extract(ctx).With(
@@ -664,7 +722,9 @@ func (a *AutograderService) GetFilesInSubmission(ctx context.Context, request *a
 	return rootPB, nil
 }
 
-func (a *AutograderService) GetCourse(ctx context.Context, request *autograder_pb.GetCourseRequest) (*autograder_pb.GetCourseResponse, error) {
+func (a *AutograderService) GetCourse(
+	ctx context.Context, request *autograder_pb.GetCourseRequest,
+) (*autograder_pb.GetCourseResponse, error) {
 	course, err := a.courseRepo.GetCourse(ctx, request.GetCourseId())
 	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
 	if member.GetRole() != model_pb.CourseRole_TA && member.GetRole() != model_pb.CourseRole_Instructor {
@@ -674,7 +734,9 @@ func (a *AutograderService) GetCourse(ctx context.Context, request *autograder_p
 	return resp, err
 }
 
-func (a *AutograderService) GetAssignment(ctx context.Context, request *autograder_pb.GetAssignmentRequest) (*autograder_pb.GetAssignmentResponse, error) {
+func (a *AutograderService) GetAssignment(
+	ctx context.Context, request *autograder_pb.GetAssignmentRequest,
+) (*autograder_pb.GetAssignmentResponse, error) {
 	assignment, err := a.assignmentRepo.GetAssignment(ctx, request.GetAssignmentId())
 	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
 	anonymous := a.leaderboardRepo.GetLeaderboardAnonymous(ctx, request.GetAssignmentId())
@@ -682,7 +744,9 @@ func (a *AutograderService) GetAssignment(ctx context.Context, request *autograd
 	return resp, err
 }
 
-func (a *AutograderService) GetSubmissionReport(ctx context.Context, request *autograder_pb.GetSubmissionReportRequest) (*autograder_pb.GetSubmissionReportResponse, error) {
+func (a *AutograderService) GetSubmissionReport(
+	ctx context.Context, request *autograder_pb.GetSubmissionReportRequest,
+) (*autograder_pb.GetSubmissionReportResponse, error) {
 	submissionId := request.GetSubmissionId()
 	brief, err := a.submissionReportRepo.GetSubmissionBriefReport(ctx, submissionId)
 	if brief == nil {
@@ -699,7 +763,9 @@ func (a *AutograderService) GetSubmissionReport(ctx context.Context, request *au
 	return resp, err
 }
 
-func (a *AutograderService) CreateManifest(ctx context.Context, request *autograder_pb.CreateManifestRequest) (*autograder_pb.CreateManifestResponse, error) {
+func (a *AutograderService) CreateManifest(
+	ctx context.Context, request *autograder_pb.CreateManifestRequest,
+) (*autograder_pb.CreateManifestResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	id, err := a.manifestRepo.CreateManifest(user.GetUserId(), request.GetAssignmentId())
 	if err != nil {
@@ -709,7 +775,9 @@ func (a *AutograderService) CreateManifest(ctx context.Context, request *autogra
 	return resp, nil
 }
 
-func (a *AutograderService) CreateSubmission(ctx context.Context, request *autograder_pb.CreateSubmissionRequest) (*autograder_pb.CreateSubmissionResponse, error) {
+func (a *AutograderService) CreateSubmission(
+	ctx context.Context, request *autograder_pb.CreateSubmissionRequest,
+) (*autograder_pb.CreateSubmissionResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	manifestId := request.GetManifestId()
 	assignmentId := request.GetAssignmentId()
@@ -766,7 +834,10 @@ func (a *AutograderService) signPayloadToken(key []byte, payload proto.Message, 
 		return "", status.Error(codes.Internal, "PROTOBUF_MARSHAL")
 	}
 	now := time.Now()
-	claims := ProtobufClaim{Payload: base64.StdEncoding.EncodeToString(raw), StandardClaims: jwt.StandardClaims{IssuedAt: now.Unix(), ExpiresAt: expireAt.Unix()}}
+	claims := ProtobufClaim{
+		Payload:        base64.StdEncoding.EncodeToString(raw),
+		StandardClaims: jwt.StandardClaims{IssuedAt: now.Unix(), ExpiresAt: expireAt.Unix()},
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
 	ss, err := token.SignedString(key)
 	if err != nil {
@@ -775,7 +846,9 @@ func (a *AutograderService) signPayloadToken(key []byte, payload proto.Message, 
 	return ss, nil
 }
 
-func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_pb.InitUploadRequest) (*autograder_pb.InitUploadResponse, error) {
+func (a *AutograderService) InitUpload(
+	ctx context.Context, request *autograder_pb.InitUploadRequest,
+) (*autograder_pb.InitUploadResponse, error) {
 	filename := request.GetFilename()
 	if isFilenameInvalid(filename) {
 
@@ -800,12 +873,14 @@ func (a *AutograderService) InitUpload(ctx context.Context, request *autograder_
 	return resp, nil
 }
 
-func (a *AutograderService) SubscribeSubmission(request *autograder_pb.SubscribeSubmissionRequest, server autograder_pb.AutograderService_SubscribeSubmissionServer) error {
+func (a *AutograderService) SubscribeSubmission(
+	request *autograder_pb.SubscribeSubmissionRequest, server autograder_pb.AutograderService_SubscribeSubmissionServer,
+) error {
 	_, err := a.AuthFunc(server.Context(), request, "/AutograderService/SubscribeSubmission")
 	if err != nil {
 		return err
 	}
-	c := make(chan *grader.GradeFinished)
+	c := make(chan *grader_pb.GradeReport)
 	id := request.GetSubmissionId()
 	l := ctxzap.Extract(server.Context()).With(zap.Uint64("submissionId", id))
 	a.subsMu.Lock()
@@ -817,11 +892,13 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 	}
 	if err == nil && brief.GetStatus() != model_pb.SubmissionStatus_Running && brief.GetStatus() != model_pb.SubmissionStatus_Queued {
 		a.subsMu.Unlock()
-		return server.Send(&autograder_pb.SubscribeSubmissionResponse{
-			Score:    brief.GetScore(),
-			MaxScore: brief.GetMaxScore(),
-			Status:   brief.GetStatus(),
-		})
+		return server.Send(
+			&autograder_pb.SubscribeSubmissionResponse{
+				Score:    brief.GetScore(),
+				MaxScore: brief.GetMaxScore(),
+				Status:   brief.GetStatus(),
+			},
+		)
 	}
 	var idx int
 	l.Debug("SubscribeSubmission.Begin")
@@ -838,19 +915,24 @@ func (a *AutograderService) SubscribeSubmission(request *autograder_pb.Subscribe
 			a.subsMu.Unlock()
 			return nil
 		case r := <-c:
-			err := server.Send(&autograder_pb.SubscribeSubmissionResponse{
-				Score:    r.BriefReport.GetScore(),
-				MaxScore: r.BriefReport.GetMaxScore(),
-				Status:   r.BriefReport.GetStatus(),
-			})
-			if r.BriefReport.GetStatus() == model_pb.SubmissionStatus_Finished {
+			err := server.Send(
+				&autograder_pb.SubscribeSubmissionResponse{
+					Score:    r.GetBrief().GetScore(),
+					MaxScore: r.GetBrief().GetMaxScore(),
+					Status:   r.GetBrief().GetStatus(),
+				},
+			)
+			if r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Failed ||
+				r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Finished {
 				return err
 			}
 		}
 	}
 }
 
-func (a *AutograderService) getSubmissionHistory(ctx context.Context, userId, assignmentId uint64) ([]*autograder_pb.SubmissionInfo, error) {
+func (a *AutograderService) getSubmissionHistory(
+	ctx context.Context, userId, assignmentId uint64,
+) ([]*autograder_pb.SubmissionInfo, error) {
 	var submissions []*autograder_pb.SubmissionInfo
 	subIds, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, userId, assignmentId)
 	if err != nil {
@@ -898,7 +980,9 @@ func (a *AutograderService) getSubmissionHistory(ctx context.Context, userId, as
 	return submissions, nil
 }
 
-func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, request *autograder_pb.GetSubmissionsInAssignmentRequest) (*autograder_pb.GetSubmissionsInAssignmentResponse, error) {
+func (a *AutograderService) GetSubmissionsInAssignment(
+	ctx context.Context, request *autograder_pb.GetSubmissionsInAssignmentRequest,
+) (*autograder_pb.GetSubmissionsInAssignmentResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	submissions, err := a.getSubmissionHistory(ctx, user.GetUserId(), request.GetAssignmentId())
 	if err != nil {
@@ -908,7 +992,9 @@ func (a *AutograderService) GetSubmissionsInAssignment(ctx context.Context, requ
 	return resp, nil
 }
 
-func (a *AutograderService) GetAssignmentsInCourse(ctx context.Context, request *autograder_pb.GetAssignmentsInCourseRequest) (*autograder_pb.GetAssignmentsInCourseResponse, error) {
+func (a *AutograderService) GetAssignmentsInCourse(
+	ctx context.Context, request *autograder_pb.GetAssignmentsInCourseRequest,
+) (*autograder_pb.GetAssignmentsInCourseResponse, error) {
 	var assignments []*autograder_pb.GetAssignmentsInCourseResponse_CourseAssignmentInfo
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	assignmentIds, err := a.courseRepo.GetAssignmentsByCourse(ctx, request.GetCourseId())
@@ -939,7 +1025,9 @@ func (a *AutograderService) GetAssignmentsInCourse(ctx context.Context, request 
 	return response, nil
 }
 
-func (a *AutograderService) GetCourseList(ctx context.Context, request *autograder_pb.GetCourseListRequest) (*autograder_pb.GetCourseListResponse, error) {
+func (a *AutograderService) GetCourseList(
+	ctx context.Context, request *autograder_pb.GetCourseListRequest,
+) (*autograder_pb.GetCourseListResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	var courses []*autograder_pb.GetCourseListResponse_CourseCardInfo
 	courseMembers, err := a.userRepo.GetCoursesByUser(ctx, user.GetUserId())
@@ -981,7 +1069,9 @@ func (a *AutograderService) signLoginToken(ctx context.Context, userId uint64, u
 	return nil
 }
 
-func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.LoginRequest) (*autograder_pb.LoginResponse, error) {
+func (a *AutograderService) Login(
+	ctx context.Context, request *autograder_pb.LoginRequest,
+) (*autograder_pb.LoginResponse, error) {
 	l := ctxzap.Extract(ctx)
 	username := request.GetUsername()
 	password := request.GetPassword()
@@ -1006,7 +1096,9 @@ func (a *AutograderService) Login(ctx context.Context, request *autograder_pb.Lo
 	return response, nil
 }
 
-func (a *AutograderService) ActivateSubmission(ctx context.Context, request *autograder_pb.ActivateSubmissionRequest) (*autograder_pb.ActivateSubmissionResponse, error) {
+func (a *AutograderService) ActivateSubmission(
+	ctx context.Context, request *autograder_pb.ActivateSubmissionRequest,
+) (*autograder_pb.ActivateSubmissionResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	submission := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	report, err := a.submissionReportRepo.GetSubmissionReport(ctx, request.GetSubmissionId())
@@ -1016,12 +1108,14 @@ func (a *AutograderService) ActivateSubmission(ctx context.Context, request *aut
 	if len(report.Leaderboard) == 0 {
 		return &autograder_pb.ActivateSubmissionResponse{Activated: false}, nil
 	}
-	err = a.leaderboardRepo.UpdateLeaderboardEntry(ctx, submission.GetAssignmentId(), user.GetUserId(), &model_pb.LeaderboardEntry{
-		SubmissionId: request.GetSubmissionId(),
-		SubmittedAt:  submission.GetSubmittedAt(),
-		Items:        report.Leaderboard,
-		UserId:       user.GetUserId(),
-	})
+	err = a.leaderboardRepo.UpdateLeaderboardEntry(
+		ctx, submission.GetAssignmentId(), user.GetUserId(), &model_pb.LeaderboardEntry{
+			SubmissionId: request.GetSubmissionId(),
+			SubmittedAt:  submission.GetSubmittedAt(),
+			Items:        report.Leaderboard,
+			UserId:       user.GetUserId(),
+		},
+	)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "UPDATE_ENTRY")
 	}
@@ -1043,20 +1137,20 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 	}
 	err = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, submissionId, assignmentId)
 	config := assignment.ProgrammingConfig
-	notifyC := make(chan *grader.GradeFinished)
+	notifyC := make(chan *grader_pb.GradeReport)
 	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Queued}
 	err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, submissionId, brief)
 	go a.progGrader.GradeSubmission(submissionId, submission, config, notifyC)
 	go func() {
-		for {
-			r := <-notifyC
+		for r := range notifyC {
 			a.subsMu.Lock()
 			for _, sub := range a.reportSubs[submissionId] {
 				if sub != nil {
 					sub <- r
 				}
 			}
-			if r.BriefReport.GetStatus() == model_pb.SubmissionStatus_Finished || r.BriefReport.GetStatus() == model_pb.SubmissionStatus_Failed {
+			if r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Finished ||
+				r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Failed {
 				grpclog.Infof("submission %d finished", submissionId)
 				delete(a.reportSubs, submissionId)
 				a.subsMu.Unlock()
@@ -1082,13 +1176,15 @@ func (a *AutograderService) runUnfinishedSubmissions() {
 }
 
 func (a *AutograderService) parseTokenPayload(key []byte, tokenString string) ([]byte, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected singning method: %v", token.Header["alg"])
-		}
+	token, err := jwt.Parse(
+		tokenString, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected singning method: %v", token.Header["alg"])
+			}
 
-		return key, nil
-	})
+			return key, nil
+		},
+	)
 	if err != nil {
 		grpclog.Errorf("failed to parse: %v", err)
 		return nil, err
@@ -1244,7 +1340,9 @@ func (a *AutograderService) getGithubUser(ctx context.Context, code string) (*gi
 	return ghUser, token, nil
 }
 
-func (a *AutograderService) GithubLogin(ctx context.Context, request *autograder_pb.GithubLoginRequest) (*autograder_pb.GithubLoginResponse, error) {
+func (a *AutograderService) GithubLogin(
+	ctx context.Context, request *autograder_pb.GithubLoginRequest,
+) (*autograder_pb.GithubLoginResponse, error) {
 	l := ctxzap.Extract(ctx)
 	ghUser, token, err := a.getGithubUser(ctx, request.Code)
 	if err != nil {
@@ -1317,7 +1415,9 @@ func (a *AutograderService) GithubLogin(ctx context.Context, request *autograder
 	return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
 }
 
-func (a *AutograderService) GetUser(ctx context.Context, request *autograder_pb.GetUserRequest) (*autograder_pb.GetUserResponse, error) {
+func (a *AutograderService) GetUser(
+	ctx context.Context, request *autograder_pb.GetUserRequest,
+) (*autograder_pb.GetUserResponse, error) {
 	l := ctxzap.Extract(ctx)
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	l.Debug("GetUser", zap.String("username", user.GetUsername()))
@@ -1329,7 +1429,9 @@ func (a *AutograderService) GetUser(ctx context.Context, request *autograder_pb.
 	return &autograder_pb.GetUserResponse{User: dbUser}, nil
 }
 
-func (a *AutograderService) UnbindGithub(ctx context.Context, request *autograder_pb.UnbindGithubRequest) (*autograder_pb.UnbindGithubResponse, error) {
+func (a *AutograderService) UnbindGithub(
+	ctx context.Context, request *autograder_pb.UnbindGithubRequest,
+) (*autograder_pb.UnbindGithubResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	err := a.userRepo.UnbindGithubId(ctx, user.GetUserId())
 	if err != nil {
@@ -1338,7 +1440,9 @@ func (a *AutograderService) UnbindGithub(ctx context.Context, request *autograde
 	return &autograder_pb.UnbindGithubResponse{Success: true}, nil
 }
 
-func (a *AutograderService) BindGithub(ctx context.Context, request *autograder_pb.BindGithubRequest) (*autograder_pb.BindGithubResponse, error) {
+func (a *AutograderService) BindGithub(
+	ctx context.Context, request *autograder_pb.BindGithubRequest,
+) (*autograder_pb.BindGithubResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	ghUser, _, err := a.getGithubUser(ctx, request.Code)
 	if err != nil {
@@ -1359,7 +1463,9 @@ func (a *AutograderService) BindGithub(ctx context.Context, request *autograder_
 	return &autograder_pb.BindGithubResponse{Success: true}, nil
 }
 
-func (a *AutograderService) UpdateUser(ctx context.Context, request *autograder_pb.UpdateUserRequest) (*autograder_pb.UpdateUserResponse, error) {
+func (a *AutograderService) UpdateUser(
+	ctx context.Context, request *autograder_pb.UpdateUserRequest,
+) (*autograder_pb.UpdateUserResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	dbUser, err := a.userRepo.GetUserById(ctx, user.GetUserId())
 	if err != nil {
@@ -1380,7 +1486,9 @@ func (a *AutograderService) UpdateUser(ctx context.Context, request *autograder_
 	return &autograder_pb.UpdateUserResponse{Success: true}, nil
 }
 
-func (a *AutograderService) UpdatePassword(ctx context.Context, request *autograder_pb.UpdatePasswordRequest) (*autograder_pb.UpdatePasswordResponse, error) {
+func (a *AutograderService) UpdatePassword(
+	ctx context.Context, request *autograder_pb.UpdatePasswordRequest,
+) (*autograder_pb.UpdatePasswordResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	dbUser, err := a.userRepo.GetUserById(ctx, user.GetUserId())
 	if err != nil {
@@ -1400,7 +1508,9 @@ func (a *AutograderService) UpdatePassword(ctx context.Context, request *autogra
 	return &autograder_pb.UpdatePasswordResponse{Success: true}, nil
 }
 
-func (a *AutograderService) JoinCourse(ctx context.Context, request *autograder_pb.JoinCourseRequest) (*autograder_pb.JoinCourseResponse, error) {
+func (a *AutograderService) JoinCourse(
+	ctx context.Context, request *autograder_pb.JoinCourseRequest,
+) (*autograder_pb.JoinCourseResponse, error) {
 	courseId := utils.Base30Decode(request.GetJoinCode())
 	course, err := a.courseRepo.GetCourse(ctx, courseId)
 	if err != nil {
@@ -1431,7 +1541,9 @@ func (a *AutograderService) JoinCourse(ctx context.Context, request *autograder_
 	return &autograder_pb.JoinCourseResponse{CourseId: courseId}, nil
 }
 
-func (a *AutograderService) GenerateJoinCode(ctx context.Context, request *autograder_pb.GenerateJoinCodeRequest) (*autograder_pb.GenerateJoinCodeResponse, error) {
+func (a *AutograderService) GenerateJoinCode(
+	ctx context.Context, request *autograder_pb.GenerateJoinCodeRequest,
+) (*autograder_pb.GenerateJoinCodeResponse, error) {
 	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", request.GetCourseId()))
 	code := utils.Base30Encode(request.GetCourseId())
 	course, err := a.courseRepo.GetCourse(ctx, request.GetCourseId())
@@ -1448,7 +1560,9 @@ func (a *AutograderService) GenerateJoinCode(ctx context.Context, request *autog
 	return &autograder_pb.GenerateJoinCodeResponse{JoinCode: code}, nil
 }
 
-func (a *AutograderService) ChangeAllowsJoinCourse(ctx context.Context, request *autograder_pb.ChangeAllowsJoinCourseRequest) (*autograder_pb.ChangeAllowsJoinCourseResponse, error) {
+func (a *AutograderService) ChangeAllowsJoinCourse(
+	ctx context.Context, request *autograder_pb.ChangeAllowsJoinCourseRequest,
+) (*autograder_pb.ChangeAllowsJoinCourseResponse, error) {
 	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", request.GetCourseId()))
 	course, err := a.courseRepo.GetCourse(ctx, request.GetCourseId())
 	if err != nil {
@@ -1464,7 +1578,9 @@ func (a *AutograderService) ChangeAllowsJoinCourse(ctx context.Context, request 
 	return &autograder_pb.ChangeAllowsJoinCourseResponse{AllowsJoin: course.AllowsJoin}, nil
 }
 
-func (a *AutograderService) InspectAllSubmissionsInAssignment(ctx context.Context, request *autograder_pb.InspectAllSubmissionsInAssignmentRequest) (*autograder_pb.InspectAllSubmissionsInAssignmentResponse, error) {
+func (a *AutograderService) InspectAllSubmissionsInAssignment(
+	ctx context.Context, request *autograder_pb.InspectAllSubmissionsInAssignmentRequest,
+) (*autograder_pb.InspectAllSubmissionsInAssignmentResponse, error) {
 	assignmentId := request.GetAssignmentId()
 	courseId := ctx.Value(courseIdCtxKey{}).(uint64)
 	members, err := a.courseRepo.GetUsersByCourse(ctx, courseId)
@@ -1485,18 +1601,22 @@ func (a *AutograderService) InspectAllSubmissionsInAssignment(ctx context.Contex
 			l.Error("InspectAllSubmissionsInAssignment.GetSubmissions", zap.Error(err))
 			return nil, status.Error(codes.Internal, "GET_SUBMISSIONS")
 		}
-		userSubmissionInfo = append(userSubmissionInfo, &autograder_pb.InspectAllSubmissionsInAssignmentResponse_UserSubmissionInfo{
-			UserId:          member.GetUserId(),
-			Username:        user.GetUsername(),
-			Nickname:        user.GetNickname(),
-			StudentId:       user.GetStudentId(),
-			SubmissionCount: uint64(len(submissions)),
-		})
+		userSubmissionInfo = append(
+			userSubmissionInfo, &autograder_pb.InspectAllSubmissionsInAssignmentResponse_UserSubmissionInfo{
+				UserId:          member.GetUserId(),
+				Username:        user.GetUsername(),
+				Nickname:        user.GetNickname(),
+				StudentId:       user.GetStudentId(),
+				SubmissionCount: uint64(len(submissions)),
+			},
+		)
 	}
 	return &autograder_pb.InspectAllSubmissionsInAssignmentResponse{Entries: userSubmissionInfo}, nil
 }
 
-func (a *AutograderService) InspectUserSubmissionHistory(ctx context.Context, request *autograder_pb.InspectUserSubmissionHistoryRequest) (*autograder_pb.InspectUserSubmissionHistoryResponse, error) {
+func (a *AutograderService) InspectUserSubmissionHistory(
+	ctx context.Context, request *autograder_pb.InspectUserSubmissionHistoryRequest,
+) (*autograder_pb.InspectUserSubmissionHistoryResponse, error) {
 	assignmentId := request.GetAssignmentId()
 	userId := request.GetUserId()
 	submissions, err := a.getSubmissionHistory(ctx, userId, assignmentId)
@@ -1506,13 +1626,17 @@ func (a *AutograderService) InspectUserSubmissionHistory(ctx context.Context, re
 	return &autograder_pb.InspectUserSubmissionHistoryResponse{Submissions: submissions}, nil
 }
 
-func (a *AutograderService) RegradeSubmission(ctx context.Context, request *autograder_pb.RegradeSubmissionRequest) (*autograder_pb.RegradeSubmissionResponse, error) {
+func (a *AutograderService) RegradeSubmission(
+	ctx context.Context, request *autograder_pb.RegradeSubmissionRequest,
+) (*autograder_pb.RegradeSubmissionResponse, error) {
 	assignmentId := ctx.Value(submissionCtxKey{}).(*model_pb.Submission).AssignmentId
 	go a.runSubmission(context.Background(), request.SubmissionId, assignmentId)
 	return &autograder_pb.RegradeSubmissionResponse{}, nil
 }
 
-func (a *AutograderService) RegradeAssignment(ctx context.Context, request *autograder_pb.RegradeAssignmentRequest) (*autograder_pb.RegradeAssignmentResponse, error) {
+func (a *AutograderService) RegradeAssignment(
+	ctx context.Context, request *autograder_pb.RegradeAssignmentRequest,
+) (*autograder_pb.RegradeAssignmentResponse, error) {
 	l := ctxzap.Extract(ctx)
 	courseId := ctx.Value(courseIdCtxKey{}).(uint64)
 	members, err := a.courseRepo.GetUsersByCourse(ctx, courseId)
@@ -1521,7 +1645,9 @@ func (a *AutograderService) RegradeAssignment(ctx context.Context, request *auto
 	}
 	var submissionIds []uint64
 	for _, member := range members {
-		userSubmissions, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, member.UserId, request.AssignmentId)
+		userSubmissions, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(
+			ctx, member.UserId, request.AssignmentId,
+		)
 		if err != nil {
 			l.Error("RegradeAssignment.GetSubmissions", zap.Error(err))
 		}
@@ -1533,12 +1659,16 @@ func (a *AutograderService) RegradeAssignment(ctx context.Context, request *auto
 	return &autograder_pb.RegradeAssignmentResponse{}, nil
 }
 
-func (a *AutograderService) ChangeLeaderboardAnonymous(ctx context.Context, request *autograder_pb.ChangeLeaderboardAnonymousRequest) (*autograder_pb.ChangeLeaderboardAnonymousResponse, error) {
+func (a *AutograderService) ChangeLeaderboardAnonymous(
+	ctx context.Context, request *autograder_pb.ChangeLeaderboardAnonymousRequest,
+) (*autograder_pb.ChangeLeaderboardAnonymousResponse, error) {
 	a.leaderboardRepo.SetLeaderboardAnonymous(ctx, request.GetAssignmentId(), request.GetAnonymous())
 	return &autograder_pb.ChangeLeaderboardAnonymousResponse{Anonymous: request.Anonymous}, nil
 }
 
-func (a *AutograderService) ExportAssignmentGrades(ctx context.Context, request *autograder_pb.ExportAssignmentGradesRequest) (*autograder_pb.ExportAssignmentGradesResponse, error) {
+func (a *AutograderService) ExportAssignmentGrades(
+	ctx context.Context, request *autograder_pb.ExportAssignmentGradesRequest,
+) (*autograder_pb.ExportAssignmentGradesResponse, error) {
 	courseId := ctx.Value(courseIdCtxKey{}).(uint64)
 	assignmentId := request.GetAssignmentId()
 	members, err := a.courseRepo.GetUsersByCourse(ctx, courseId)
@@ -1575,8 +1705,12 @@ func (a *AutograderService) ExportAssignmentGrades(ctx context.Context, request 
 	return &autograder_pb.ExportAssignmentGradesResponse{Entries: entries}, nil
 }
 
-func NewAutograderServiceServer(db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client, ghOauth2Config *oauth2.Config) *AutograderService {
-	srr := repository.NewKVSubmissionReportRepository(db)
+func NewAutograderServiceServer(
+	db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client,
+	ghOauth2Config *oauth2.Config,
+	srr repository.SubmissionReportRepository,
+	graderHubSvc *grader_grpc.GraderHubService,
+) *AutograderService {
 	a := &AutograderService{
 		manifestRepo:         repository.NewKVManifestRepository(db),
 		userRepo:             repository.NewKVUserRepository(db),
@@ -1586,13 +1720,14 @@ func NewAutograderServiceServer(db *pebble.DB, ls *storage.LocalStorage, mailer 
 		assignmentRepo:       repository.NewKVAssignmentRepository(db),
 		leaderboardRepo:      repository.NewKVLeaderboardRepository(db),
 		verificationCodeRepo: repository.NewKVVerificationCodeRepository(db),
-		progGrader:           grader.NewDockerProgrammingGrader(srr),
+		progGrader:           grader.NewHubGrader(graderHubSvc),
 		githubOAuth2Config:   ghOauth2Config,
 		mailer:               mailer,
 		captchaVerifier:      captchaVerifier,
 		ls:                   ls,
-		reportSubs:           make(map[uint64][]chan *grader.GradeFinished),
+		reportSubs:           make(map[uint64][]chan *grader_pb.GradeReport),
 		subsMu:               &sync.Mutex{},
+		graderHubSvc:         graderHubSvc,
 	}
 	a.initAuthFuncs()
 	go a.runUnfinishedSubmissions()

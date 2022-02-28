@@ -12,6 +12,7 @@ message User {
   string nickname = 5;
   string student_id = 6;
   google.protobuf.Timestamp created_at = 7;
+  bool is_admin = 8;
 }
 
 enum SubmissionStatus {
@@ -61,10 +62,17 @@ message ProgrammingAssignmentConfig {
   float cpu = 3;
   int64 memory = 4;
   int64 timeout = 5;
+  repeated string tags = 6;
 }
 
 enum AssignmentType {
   Programming = 0;
+}
+
+message SubmissionLimitConfig {
+  uint64 total = 1;
+  uint64 frequency = 2;
+  uint64 period = 3;
 }
 
 message Assignment {
@@ -77,6 +85,7 @@ message Assignment {
   string description = 7;
   ProgrammingAssignmentConfig programming_config = 8;
   bool published = 9;
+  SubmissionLimitConfig submission_limit = 10;
 }
 
 enum TestcaseVisibility {
@@ -199,4 +208,21 @@ message ExportStatusMetadata {
   uint64 progress = 1;
   uint64 total = 2;
   google.protobuf.Timestamp created_at = 3;
+}
+
+message GraderInfo {
+  string hostname = 1;
+  repeated string tags = 2;
+  uint64 concurrency = 3;
+}
+
+message GraderStatusMetadata {
+  enum Status {
+    Offline = 0;
+    Online = 1;
+    Unknown = 2;
+  }
+  GraderInfo info = 1;
+  string ip = 2;
+  Status status = 3;
 }

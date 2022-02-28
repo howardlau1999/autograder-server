@@ -67,6 +67,8 @@ type AutograderServiceClient interface {
 	RegradeAssignment(ctx context.Context, in *RegradeAssignmentRequest, opts ...grpc.CallOption) (*RegradeAssignmentResponse, error)
 	ChangeLeaderboardAnonymous(ctx context.Context, in *ChangeLeaderboardAnonymousRequest, opts ...grpc.CallOption) (*ChangeLeaderboardAnonymousResponse, error)
 	ExportAssignmentGrades(ctx context.Context, in *ExportAssignmentGradesRequest, opts ...grpc.CallOption) (*ExportAssignmentGradesResponse, error)
+	RemoveGrader(ctx context.Context, in *RemoveGraderRequest, opts ...grpc.CallOption) (*RemoveGraderResponse, error)
+	GetAllGraders(ctx context.Context, in *GetAllGradersRequest, opts ...grpc.CallOption) (*GetAllGradersResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -505,6 +507,24 @@ func (c *autograderServiceClient) ExportAssignmentGrades(ctx context.Context, in
 	return out, nil
 }
 
+func (c *autograderServiceClient) RemoveGrader(ctx context.Context, in *RemoveGraderRequest, opts ...grpc.CallOption) (*RemoveGraderResponse, error) {
+	out := new(RemoveGraderResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/RemoveGrader", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) GetAllGraders(ctx context.Context, in *GetAllGradersRequest, opts ...grpc.CallOption) (*GetAllGradersResponse, error) {
+	out := new(GetAllGradersResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GetAllGraders", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -554,6 +574,8 @@ type AutograderServiceServer interface {
 	RegradeAssignment(context.Context, *RegradeAssignmentRequest) (*RegradeAssignmentResponse, error)
 	ChangeLeaderboardAnonymous(context.Context, *ChangeLeaderboardAnonymousRequest) (*ChangeLeaderboardAnonymousResponse, error)
 	ExportAssignmentGrades(context.Context, *ExportAssignmentGradesRequest) (*ExportAssignmentGradesResponse, error)
+	RemoveGrader(context.Context, *RemoveGraderRequest) (*RemoveGraderResponse, error)
+	GetAllGraders(context.Context, *GetAllGradersRequest) (*GetAllGradersResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -695,6 +717,12 @@ func (UnimplementedAutograderServiceServer) ChangeLeaderboardAnonymous(context.C
 }
 func (UnimplementedAutograderServiceServer) ExportAssignmentGrades(context.Context, *ExportAssignmentGradesRequest) (*ExportAssignmentGradesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ExportAssignmentGrades not implemented")
+}
+func (UnimplementedAutograderServiceServer) RemoveGrader(context.Context, *RemoveGraderRequest) (*RemoveGraderResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveGrader not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetAllGraders(context.Context, *GetAllGradersRequest) (*GetAllGradersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAllGraders not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1522,6 +1550,42 @@ func _AutograderService_ExportAssignmentGrades_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_RemoveGrader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveGraderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).RemoveGrader(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/RemoveGrader",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).RemoveGrader(ctx, req.(*RemoveGraderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_GetAllGraders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAllGradersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GetAllGraders(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GetAllGraders",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GetAllGraders(ctx, req.(*GetAllGradersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1704,6 +1768,14 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExportAssignmentGrades",
 			Handler:    _AutograderService_ExportAssignmentGrades_Handler,
+		},
+		{
+			MethodName: "RemoveGrader",
+			Handler:    _AutograderService_RemoveGrader_Handler,
+		},
+		{
+			MethodName: "GetAllGraders",
+			Handler:    _AutograderService_GetAllGraders_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

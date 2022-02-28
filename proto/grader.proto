@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+import "model.proto";
+option go_package = "autograder-server/pkg/grader/proto";
+
+message RegisterGraderRequest {
+  string token = 1;
+  GraderInfo info = 2;
+}
+
+message RegisterGraderResponse {
+  uint64 grader_id = 1;
+}
+
+message GraderHeartbeatRequest {
+  google.protobuf.Timestamp time = 1;
+  uint64 grader_id = 2;
+  uint64 concurrency = 3;
+}
+
+message GraderHeartbeatResponse {
+  repeated GradeRequest requests = 1;
+}
+
+message GradeRequest {
+  uint64 submission_id = 1;
+  Submission submission = 2;
+  ProgrammingAssignmentConfig config = 3;
+}
+
+message GradeReport {
+  SubmissionReport report = 1;
+  SubmissionBriefReport brief = 2;
+}
+
+message GradeResponse {
+  uint64 submission_id = 1;
+  GradeReport report = 2;
+}
+
+message GradeCallbackResponse {
+
+}
+
+service GraderHubService {
+  rpc RegisterGrader(RegisterGraderRequest) returns (RegisterGraderResponse);
+  rpc Grade(GradeRequest) returns (GradeCallbackResponse);
+  rpc GraderHeartbeat(stream GraderHeartbeatRequest) returns (stream GraderHeartbeatResponse);
+  rpc GradeCallback(stream GradeResponse) returns (GradeCallbackResponse);
+}
