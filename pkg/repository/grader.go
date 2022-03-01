@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 
 	model_pb "autograder-server/pkg/model/proto"
@@ -26,12 +27,50 @@ type GraderRepository interface {
 	UpdateGraderStatus(ctx context.Context, graderId uint64, status model_pb.GraderStatusMetadata_Status) error
 	UpdateGrader(ctx context.Context, graderId uint64, grader *model_pb.GraderStatusMetadata) error
 	DeleteGrader(ctx context.Context, graderId uint64) error
+	GetAllGraders(ctx context.Context) ([]uint64, []*model_pb.GraderStatusMetadata, error)
+	GetSubmissionsByGrader(ctx context.Context, graderId uint64) ([]uint64, error)
 }
 
 type KVGraderRepository struct {
 	db  *pebble.DB
 	seq Sequencer
 	mu  map[uint64]*sync.Mutex
+}
+
+func (gr *KVGraderRepository) GetSubmissionsByGrader(ctx context.Context, graderId uint64) ([]uint64, error) {
+	prefix := gr.getGraderSubmissionPrefix(graderId)
+	prefixLen := len(prefix)
+	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	var submissions []uint64
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := iter.Key()
+		submissionIdStr := key[prefixLen:]
+		submissionId, err := strconv.Atoi(string(submissionIdStr))
+		if err != nil {
+			continue
+		}
+		submissions = append(submissions, uint64(submissionId))
+	}
+	return submissions, nil
+}
+
+func (gr *KVGraderRepository) GetAllGraders(ctx context.Context) ([]uint64, []*model_pb.GraderStatusMetadata, error) {
+	prefix := gr.getGraderIdPrefix()
+	prefixLen := len(prefix)
+	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	var ids []uint64
+	var graders []*model_pb.GraderStatusMetadata
+	for iter.First(); iter.Valid(); iter.Next() {
+		id := binary.BigEndian.Uint64(iter.Key()[prefixLen:])
+		raw := iter.Value()
+		grader := &model_pb.GraderStatusMetadata{}
+		if err := proto.Unmarshal(raw, grader); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+		graders = append(graders, grader)
+	}
+	return ids, graders, nil
 }
 
 func (gr *KVGraderRepository) UpdateGrader(
@@ -61,6 +100,10 @@ func (gr *KVGraderRepository) getGraderNameKey(name string) []byte {
 
 func (gr *KVGraderRepository) getSubmissionGraderPrefix() []byte {
 	return []byte("submission:grader:")
+}
+
+func (gr *KVGraderRepository) getGraderSubmissionPrefix(graderId uint64) []byte {
+	return []byte(fmt.Sprintf("grader:submission:%d:", graderId))
 }
 
 func (gr *KVGraderRepository) getGraderSubmissionKey(graderId uint64, submissionId uint64) []byte {
@@ -107,20 +150,38 @@ func (gr *KVGraderRepository) GetGraderById(ctx context.Context, graderId uint64
 }
 
 func (gr *KVGraderRepository) ClaimSubmission(ctx context.Context, graderId uint64, submissionId uint64) error {
-	//TODO implement me
-	panic("implement me")
+	submissionGraderKey := gr.getSubmissionGraderKey(submissionId)
+	graderSubmissionKey := gr.getGraderSubmissionKey(graderId, submissionId)
+	err := gr.db.Set(submissionGraderKey, Uint64ToBytes(graderId), pebble.Sync)
+	if err != nil {
+		return err
+	}
+	err = gr.db.Set(graderSubmissionKey, nil, pebble.Sync)
+	return err
 }
 
 func (gr *KVGraderRepository) GetGraderIdBySubmissionId(ctx context.Context, submissionId uint64) (uint64, error) {
-	//TODO implement me
-	panic("implement me")
+	raw, closer, err := gr.db.Get(gr.getSubmissionGraderKey(submissionId))
+	if err != nil {
+		return 0, err
+	}
+	id := binary.BigEndian.Uint64(raw)
+	closer.Close()
+	return id, nil
 }
 
 func (gr *KVGraderRepository) GetGraderBySubmissionId(
 	ctx context.Context, submissionId uint64,
 ) (*model_pb.GraderStatusMetadata, uint64, error) {
-	//TODO implement me
-	panic("implement me")
+	id, err := gr.GetGraderIdBySubmissionId(ctx, submissionId)
+	if err != nil {
+		return nil, 0, err
+	}
+	grader, err := gr.GetGraderById(ctx, id)
+	if err != nil {
+		return nil, 0, err
+	}
+	return grader, id, nil
 }
 
 func (gr *KVGraderRepository) GetGraderByName(ctx context.Context, name string) (

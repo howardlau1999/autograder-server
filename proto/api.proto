@@ -579,8 +579,17 @@ message GetAllGradersResponse {
   message Grader {
     uint64 grader_id = 1;
     GraderStatusMetadata metadata = 2;
+    repeated uint64 submissions = 3;
   }
   repeated Grader graders = 1;
+}
+
+message CancelSubmissionRequest {
+  uint64 submission_id = 1;
+}
+
+message CancelSubmissionResponse {
+
 }
 
 service AutograderService {
@@ -631,4 +640,5 @@ service AutograderService {
    rpc ExportAssignmentGrades(ExportAssignmentGradesRequest) returns (ExportAssignmentGradesResponse);
    rpc RemoveGrader(RemoveGraderRequest) returns (RemoveGraderResponse);
    rpc GetAllGraders(GetAllGradersRequest) returns (GetAllGradersResponse);
+   rpc CancelSubmission(CancelSubmissionRequest) returns (CancelSubmissionResponse);
 }

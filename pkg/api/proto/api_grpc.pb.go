@@ -69,6 +69,7 @@ type AutograderServiceClient interface {
 	ExportAssignmentGrades(ctx context.Context, in *ExportAssignmentGradesRequest, opts ...grpc.CallOption) (*ExportAssignmentGradesResponse, error)
 	RemoveGrader(ctx context.Context, in *RemoveGraderRequest, opts ...grpc.CallOption) (*RemoveGraderResponse, error)
 	GetAllGraders(ctx context.Context, in *GetAllGradersRequest, opts ...grpc.CallOption) (*GetAllGradersResponse, error)
+	CancelSubmission(ctx context.Context, in *CancelSubmissionRequest, opts ...grpc.CallOption) (*CancelSubmissionResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -525,6 +526,15 @@ func (c *autograderServiceClient) GetAllGraders(ctx context.Context, in *GetAllG
 	return out, nil
 }
 
+func (c *autograderServiceClient) CancelSubmission(ctx context.Context, in *CancelSubmissionRequest, opts ...grpc.CallOption) (*CancelSubmissionResponse, error) {
+	out := new(CancelSubmissionResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/CancelSubmission", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -576,6 +586,7 @@ type AutograderServiceServer interface {
 	ExportAssignmentGrades(context.Context, *ExportAssignmentGradesRequest) (*ExportAssignmentGradesResponse, error)
 	RemoveGrader(context.Context, *RemoveGraderRequest) (*RemoveGraderResponse, error)
 	GetAllGraders(context.Context, *GetAllGradersRequest) (*GetAllGradersResponse, error)
+	CancelSubmission(context.Context, *CancelSubmissionRequest) (*CancelSubmissionResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -723,6 +734,9 @@ func (UnimplementedAutograderServiceServer) RemoveGrader(context.Context, *Remov
 }
 func (UnimplementedAutograderServiceServer) GetAllGraders(context.Context, *GetAllGradersRequest) (*GetAllGradersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetAllGraders not implemented")
+}
+func (UnimplementedAutograderServiceServer) CancelSubmission(context.Context, *CancelSubmissionRequest) (*CancelSubmissionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CancelSubmission not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1586,6 +1600,24 @@ func _AutograderService_GetAllGraders_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_CancelSubmission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelSubmissionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).CancelSubmission(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/CancelSubmission",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).CancelSubmission(ctx, req.(*CancelSubmissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1776,6 +1808,10 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetAllGraders",
 			Handler:    _AutograderService_GetAllGraders_Handler,
+		},
+		{
+			MethodName: "CancelSubmission",
+			Handler:    _AutograderService_CancelSubmission_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -27,6 +27,7 @@ message GradeRequest {
   uint64 submission_id = 1;
   Submission submission = 2;
   ProgrammingAssignmentConfig config = 3;
+  bool is_cancel = 4;
 }
 
 message GradeReport {

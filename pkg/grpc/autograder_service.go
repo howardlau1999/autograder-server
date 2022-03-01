@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -41,7 +42,6 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/grpclog"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -529,10 +529,9 @@ func (a *AutograderService) DeleteFileInManifest(
 }
 
 func (a *AutograderService) pullImage(image string) {
-
 	err := a.progGrader.PullImage(image)
 	if err != nil {
-		grpclog.Errorf("failed to pull image %s: %v", image, err)
+		zap.L().Error("PullImage", zap.String("image", image))
 	}
 }
 
@@ -758,6 +757,12 @@ func (a *AutograderService) GetSubmissionReport(
 	if brief.GetStatus() == model_pb.SubmissionStatus_Running {
 		return nil, status.Error(codes.NotFound, "RUNNING")
 	}
+	if brief.GetStatus() == model_pb.SubmissionStatus_Cancelled {
+		return nil, status.Error(codes.NotFound, "CANCELLED")
+	}
+	if brief.GetStatus() == model_pb.SubmissionStatus_Cancelling {
+		return nil, status.Error(codes.NotFound, "CANCELLING")
+	}
 	report, err := a.submissionReportRepo.GetSubmissionReport(ctx, submissionId)
 	resp := &autograder_pb.GetSubmissionReportResponse{Report: report, Status: brief.GetStatus()}
 	return resp, err
@@ -890,7 +895,10 @@ func (a *AutograderService) SubscribeSubmission(
 		a.subsMu.Unlock()
 		return status.Error(codes.Internal, "GET_BRIEF")
 	}
-	if err == nil && brief.GetStatus() != model_pb.SubmissionStatus_Running && brief.GetStatus() != model_pb.SubmissionStatus_Queued {
+	if err == nil &&
+		brief.GetStatus() != model_pb.SubmissionStatus_Running &&
+		brief.GetStatus() != model_pb.SubmissionStatus_Queued &&
+		brief.GetStatus() != model_pb.SubmissionStatus_Cancelled {
 		a.subsMu.Unlock()
 		return server.Send(
 			&autograder_pb.SubscribeSubmissionResponse{
@@ -1051,11 +1059,14 @@ func (a *AutograderService) GetCourseList(
 	return response, nil
 }
 
-func (a *AutograderService) signLoginToken(ctx context.Context, userId uint64, username string, nickname string) error {
+func (a *AutograderService) signLoginToken(
+	ctx context.Context, userId uint64, username string, nickname string, isAdmin bool,
+) error {
 	payload := &autograder_pb.UserTokenPayload{
 		UserId:   userId,
 		Username: username,
 		Nickname: nickname,
+		IsAdmin:  isAdmin,
 	}
 	ss, err := a.signPayloadToken(UserJWTSignKey, payload, time.Now().Add(3*time.Hour))
 	if err != nil {
@@ -1087,7 +1098,7 @@ func (a *AutograderService) Login(
 	if user == nil || err != nil || bcrypt.CompareHashAndPassword(user.GetPassword(), []byte(password)) != nil {
 		return nil, status.Error(codes.InvalidArgument, "WRONG_PASSWORD")
 	}
-	if err := a.signLoginToken(ctx, id, user.Username, user.Nickname); err != nil {
+	if err := a.signLoginToken(ctx, id, user.Username, user.Nickname, user.IsAdmin); err != nil {
 		return nil, err
 	}
 	response := &autograder_pb.LoginResponse{
@@ -1125,14 +1136,15 @@ func (a *AutograderService) ActivateSubmission(
 }
 
 func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint64, assignmentId uint64) {
+	logger := zap.L().With(zap.Uint64("submissionId", submissionId), zap.Uint64("assignmentId", assignmentId))
 	assignment, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
 	if err != nil {
-		grpclog.Errorf("failed to get assignment %d: %v", assignmentId, err)
+		logger.Error("RunSubmission.GetAssignment", zap.Error(err))
 		return
 	}
 	submission, err := a.submissionRepo.GetSubmission(ctx, submissionId)
 	if err != nil {
-		grpclog.Errorf("failed to get submission %d: %v", submissionId, err)
+		logger.Error("RunSubmission.GetSubmission", zap.Error(err))
 		return
 	}
 	err = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, submissionId, assignmentId)
@@ -1140,7 +1152,7 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 	notifyC := make(chan *grader_pb.GradeReport)
 	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Queued}
 	err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, submissionId, brief)
-	go a.progGrader.GradeSubmission(submissionId, submission, config, notifyC)
+	go a.progGrader.GradeSubmission(context.Background(), submissionId, submission, config, notifyC)
 	go func() {
 		for r := range notifyC {
 			a.subsMu.Lock()
@@ -1150,8 +1162,9 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 				}
 			}
 			if r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Finished ||
-				r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Failed {
-				grpclog.Infof("submission %d finished", submissionId)
+				r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Failed ||
+				r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Cancelled {
+				logger.Debug("RunSubmission.Finished")
 				delete(a.reportSubs, submissionId)
 				a.subsMu.Unlock()
 				return
@@ -1170,7 +1183,9 @@ func (a *AutograderService) runUnfinishedSubmissions() {
 	for _, id := range ids {
 		asgnId := id.AssignmentId
 		subId := id.SubmissionId
-		grpclog.Errorf("found unfinished submission %d assignment %d", subId, asgnId)
+		zap.L().Info(
+			"UnfinishedSubmission.Found", zap.Uint64("assignmentId", asgnId), zap.Uint64("submissionId", subId),
+		)
 		go a.runSubmission(ctx, subId, asgnId)
 	}
 }
@@ -1186,24 +1201,20 @@ func (a *AutograderService) parseTokenPayload(key []byte, tokenString string) ([
 		},
 	)
 	if err != nil {
-		grpclog.Errorf("failed to parse: %v", err)
 		return nil, err
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok || !token.Valid || claims.Valid() != nil {
-		grpclog.Errorf("not valid")
-		return nil, err
+		return nil, errors.New("claim not valid")
 	}
 	payloadString, ok := claims["payload"].(string)
 	if !ok {
-		grpclog.Errorf("no payload")
-		return nil, err
+		return nil, errors.New("payload not found")
 	}
 
 	payload, err := base64.StdEncoding.DecodeString(payloadString)
 	if err != nil {
-		grpclog.Errorf("base64: %v", err)
 		return nil, err
 	}
 	return payload, nil
@@ -1219,6 +1230,11 @@ func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Re
 	}
 	var payloadPB autograder_pb.DownloadTokenPayload
 	err = proto.Unmarshal(payload, &payloadPB)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	logger := zap.L().With(zap.String("filename", payloadPB.Filename), zap.String("realPath", payloadPB.RealPath))
 	if !payloadPB.GetIsDirectory() {
 		if err != nil || fn != payloadPB.GetFilename() {
 			w.WriteHeader(http.StatusBadRequest)
@@ -1258,7 +1274,7 @@ func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Re
 		}
 		err = filepath.Walk(payloadPB.GetRealPath(), walker)
 		if err != nil {
-			grpclog.Errorf("failed to generate zip file: %v", err)
+			logger.Error("FileDownload.GenerateZip", zap.Error(err))
 		}
 	}
 }
@@ -1275,34 +1291,38 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 	var payloadPB autograder_pb.UploadTokenPayload
 	err = proto.Unmarshal(payload, &payloadPB)
 	if err != nil {
-		grpclog.Errorf("proto: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	if !strings.HasPrefix(normalizedContentType, "multipart/form-data; boundary") {
-		grpclog.Errorf("malformed form")
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	err = r.ParseMultipartForm(10 * 1024 * 1024)
 	if err != nil {
-		grpclog.Errorf("Parse upload multipart form error: %v\n", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	uploadFile, _, err := r.FormFile("file")
 	if err != nil {
-		grpclog.Errorf("Get form file error: %v\n", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	fileHeader := make([]byte, 512)
 	_, err = uploadFile.Read(fileHeader)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	_, err = uploadFile.Seek(0, 0)
-	_ = http.DetectContentType(fileHeader)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	// TODO: filter MIME
 	destPath := filepath.Join(a.getManifestPath(payloadPB.GetManifestId()), payloadPB.Filename)
 	err = a.ls.Put(
 		r.Context(),
@@ -1310,7 +1330,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 		uploadFile,
 	)
 	if err != nil {
-		grpclog.Errorf("failed to put file: %v", err)
+		zap.L().Error("FileUpload.PutFile", zap.Error(err))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -1354,7 +1374,7 @@ func (a *AutograderService) GithubLogin(
 
 	user, userId, err := a.userRepo.GetUserByGithubId(ctx, login)
 	if user != nil {
-		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname); err != nil {
+		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname, user.IsAdmin); err != nil {
 			return nil, err
 		}
 		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
@@ -1381,7 +1401,7 @@ func (a *AutograderService) GithubLogin(
 		if err := a.userRepo.BindGithubId(ctx, userId, login); err != nil {
 			return nil, status.Error(codes.Internal, "BIND_GITHUB_ID")
 		}
-		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname); err != nil {
+		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname, user.IsAdmin); err != nil {
 			return nil, err
 		}
 		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
@@ -1396,7 +1416,7 @@ func (a *AutograderService) GithubLogin(
 		if err := a.userRepo.BindGithubId(ctx, userId, login); err != nil {
 			return nil, status.Error(codes.Internal, "BIND_GITHUB_ID")
 		}
-		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname); err != nil {
+		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname, user.IsAdmin); err != nil {
 			return nil, err
 		}
 		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
@@ -1409,7 +1429,7 @@ func (a *AutograderService) GithubLogin(
 	if err := a.userRepo.BindGithubId(ctx, userId, login); err != nil {
 		return nil, status.Error(codes.Internal, "BIND_GITHUB_ID")
 	}
-	if err := a.signLoginToken(ctx, userId, login, login); err != nil {
+	if err := a.signLoginToken(ctx, userId, login, login, false); err != nil {
 		return nil, err
 	}
 	return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
@@ -1703,6 +1723,25 @@ func (a *AutograderService) ExportAssignmentGrades(
 		entries = append(entries, entry)
 	}
 	return &autograder_pb.ExportAssignmentGradesResponse{Entries: entries}, nil
+}
+
+func (a *AutograderService) GetAllGraders(
+	ctx context.Context, request *autograder_pb.GetAllGradersRequest,
+) (*autograder_pb.GetAllGradersResponse, error) {
+	return a.graderHubSvc.GetAllGraders(ctx)
+}
+
+func (a *AutograderService) CancelSubmission(
+	ctx context.Context, request *autograder_pb.CancelSubmissionRequest,
+) (*autograder_pb.CancelSubmissionResponse, error) {
+	l := ctxzap.Extract(ctx).With(zap.Uint64("submissionId", request.GetSubmissionId()))
+	l.Debug("CancelSubmission")
+	err := a.graderHubSvc.CancelGrade(ctx, request.GetSubmissionId())
+	if err != nil {
+		l.Error("CancelSubmission.CancelGrade", zap.Error(err))
+		return nil, status.Error(codes.Internal, "CANCEL_GRADE")
+	}
+	return &autograder_pb.CancelSubmissionResponse{}, nil
 }
 
 func NewAutograderServiceServer(

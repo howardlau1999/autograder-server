@@ -3,6 +3,7 @@ package grader
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math"
 	"os"
@@ -20,20 +21,21 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
-	"google.golang.org/grpc/grpclog"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type ProgrammingGrader interface {
 	PullImage(image string) error
 	GradeSubmission(
+		ctx context.Context,
 		submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig,
 		notifyC chan *grader_pb.GradeReport,
 	)
 }
 
 type HubGrader struct {
-	hub *autograder_grpc.GraderHubService
+	hubService *autograder_grpc.GraderHubService
 }
 
 func (h *HubGrader) PullImage(image string) error {
@@ -41,6 +43,7 @@ func (h *HubGrader) PullImage(image string) error {
 }
 
 func (h *HubGrader) GradeSubmission(
+	ctx context.Context,
 	submissionId uint64, submission *model_pb.Submission, config *model_pb.ProgrammingAssignmentConfig,
 	notifyC chan *grader_pb.GradeReport,
 ) {
@@ -49,9 +52,9 @@ func (h *HubGrader) GradeSubmission(
 		Submission:   submission,
 		Config:       config,
 	}
-	h.hub.Grade(context.Background(), request)
+	h.hubService.Grade(ctx, request)
 	if notifyC != nil {
-		h.hub.SubscribeSubmission(submissionId, notifyC)
+		h.hubService.SubscribeSubmission(submissionId, notifyC)
 	}
 }
 
@@ -84,8 +87,12 @@ func (d *DockerProgrammingGrader) PullImage(image string) error {
 func (d *DockerProgrammingGrader) runDocker(
 	ctx context.Context, submissionId uint64, submission *model_pb.Submission,
 	config *model_pb.ProgrammingAssignmentConfig,
-) (internalError int64, exitCode int64, resultsJSONPath string) {
-	imgs, err := d.cli.ImageList(
+) (internalError int64, exitCode int64, resultsJSONPath string, err error) {
+	logger := zap.L().With(zap.Uint64("submissionId", submissionId))
+	logger.Debug("Docker.Run.Enter")
+	defer logger.Debug("Docker.Run.Exit")
+	var imgs []types.ImageSummary
+	imgs, err = d.cli.ImageList(
 		ctx, types.ImageListOptions{
 			All:     false,
 			Filters: filters.NewArgs(filters.Arg("reference", fmt.Sprintf("%s", config.Image))),
@@ -93,19 +100,29 @@ func (d *DockerProgrammingGrader) runDocker(
 	)
 	if err != nil {
 		internalError = -1
-		grpclog.Errorf("failed to list image for %d: %v", submissionId, err)
+		logger.Error("Docker.Run.ListImage", zap.Error(err))
 		return
 	}
 	if len(imgs) == 0 {
-		closer, err := d.cli.ImagePull(ctx, config.Image, types.ImagePullOptions{})
+		var closer io.ReadCloser
+		closer, err = d.cli.ImagePull(ctx, config.Image, types.ImagePullOptions{})
 		if err != nil {
+			if ctx.Err() != nil {
+				err = ctx.Err()
+				return
+			}
 			internalError = 1
-			grpclog.Errorf("failed to pull image for %d: %v", submissionId, err)
+			logger.Error("Docker.Run.PullImage", zap.Error(err))
 			return
 		}
 		_, err = ioutil.ReadAll(closer)
 		if err != nil {
+			if ctx.Err() != nil {
+				err = ctx.Err()
+				return
+			}
 			internalError = 2
+			logger.Error("Docker.Run.PullImage.ReadAll", zap.Error(err))
 			return
 		}
 	}
@@ -154,18 +171,29 @@ func (d *DockerProgrammingGrader) runDocker(
 	platform := &specs.Platform{Architecture: "amd64", OS: "linux"}
 	body, err := d.cli.ContainerCreate(ctx, ctCfg, hstCfg, netCfg, platform, "")
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			return
+		}
 		internalError = 3
-		grpclog.Errorf("failed to create container for %d: %v", submissionId, err)
+		logger.Error("Docker.Run.CreateContainer", zap.Error(err))
 		return
 	}
-	id := body.ID
-	doneC, errC := d.cli.ContainerWait(ctx, id, container.WaitConditionNextExit)
-	err = d.cli.ContainerStart(ctx, id, types.ContainerStartOptions{})
+	containerId := body.ID
+	logger = logger.With(zap.String("containerId", containerId))
+	logger.Debug("Docker.Run.ContainerCreated")
+	doneC, errC := d.cli.ContainerWait(ctx, containerId, container.WaitConditionNextExit)
+	err = d.cli.ContainerStart(ctx, containerId, types.ContainerStartOptions{})
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			return
+		}
 		internalError = 4
-		grpclog.Errorf("failed to start container for %d: %v", submissionId, err)
+		logger.Error("Docker.Run.StartContainer")
 		return
 	}
+	logger.Debug("Docker.Run.ContainerStarted")
 	timeout := 5 * time.Minute
 	if config.GetTimeout() > 0 {
 		timeout = time.Duration(config.GetTimeout()) * time.Second
@@ -173,33 +201,59 @@ func (d *DockerProgrammingGrader) runDocker(
 	ticker := time.NewTicker(timeout)
 	defer ticker.Stop()
 	select {
-	case err := <-errC:
+	case err = <-errC:
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			return
+		}
 		internalError = 5
-		grpclog.Errorf("failed to wait container for %d: %v", submissionId, err)
+		logger.Error("Docker.Run.WaitContainer")
+		return
+	case <-ctx.Done():
+		err = ctx.Err()
+		go func() {
+			if err := d.cli.ContainerRemove(
+				context.Background(), containerId, types.ContainerRemoveOptions{Force: true},
+			); err != nil {
+				logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
+			}
+		}()
 		return
 	case <-ticker.C:
-		internalError = -2
-		d.cli.ContainerRemove(ctx, id, types.ContainerRemoveOptions{Force: true})
+		internalError = 7
+		go func() {
+			if err := d.cli.ContainerRemove(
+				context.Background(), containerId, types.ContainerRemoveOptions{Force: true},
+			); err != nil {
+				logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
+			}
+		}()
 		return
 	case <-doneC:
+		logger.Debug("Docker.Run.ContainerExited")
 	}
-	containerDetail, err := d.cli.ContainerInspect(ctx, id)
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	containerDetail, err := d.cli.ContainerInspect(ctx, containerId)
 	if err != nil {
 		internalError = 6
-		grpclog.Errorf("failed to inspect container for %d: %v", submissionId, err)
+		logger.Error("Docker.Run.InspectContainer", zap.Error(err))
 		return
 	}
 	exitCode = int64(containerDetail.State.ExitCode)
-	err = d.cli.ContainerRemove(ctx, id, types.ContainerRemoveOptions{})
-	if err != nil {
-		internalError = 7
-		grpclog.Errorf("failed to remove container for %d: %v", submissionId, err)
-		return
-	}
+	go func() {
+		err = d.cli.ContainerRemove(ctx, containerId, types.ContainerRemoveOptions{})
+		if err != nil {
+			logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
+			return
+		}
+	}()
 	return
 }
 
 func (d *DockerProgrammingGrader) GradeSubmission(
+	ctx context.Context,
 	submissionId uint64, submission *model_pb.Submission,
 	config *model_pb.ProgrammingAssignmentConfig, notifyC chan *grader_pb.GradeReport,
 ) {
@@ -221,27 +275,39 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 	if notifyC != nil {
 		go func() { notifyC <- &grader_pb.GradeReport{Brief: briefPB} }()
 	}
-	ctx := context.Background()
-	internalError, exitCode, resultsJSONPath := d.runDocker(ctx, submissionId, submission, config)
+	logger := zap.L().With(zap.Uint64("submissionId", submissionId))
+	internalError, exitCode, resultsJSONPath, err := d.runDocker(ctx, submissionId, submission, config)
+	if err == context.Canceled {
+		briefPB.Status = model_pb.SubmissionStatus_Cancelled
+		notifyC <- &grader_pb.GradeReport{Brief: briefPB}
+		close(notifyC)
+		return
+	}
+	logger.Debug(
+		"Docker.Run.Returned", zap.Int64("internalError", internalError), zap.Int64("exitCode", exitCode),
+		zap.String("resultsJSONPath", resultsJSONPath),
+	)
 	resultsPB := &model_pb.SubmissionReport{}
 	var json []byte
-	var err error
 	var resultsJSON *os.File
 	if internalError == 0 && exitCode == 0 {
 		resultsJSON, err = os.Open(resultsJSONPath)
 		if err != nil {
 			internalError = 8
+			logger.Error("Result.Open", zap.Error(err))
 			goto WriteReport
 		}
 		defer resultsJSON.Close()
 		json, err = ioutil.ReadAll(resultsJSON)
 		if err != nil {
 			internalError = 9
+			logger.Error("Result.ReadAll", zap.Error(err))
 			goto WriteReport
 		}
 		err = protojson.Unmarshal(json, resultsPB)
 		if err != nil {
 			internalError = 10
+			logger.Error("Result.Unmarshal", zap.Error(err))
 			goto WriteReport
 		}
 		if resultsPB.GetScore() == 0 {
@@ -289,5 +355,5 @@ func NewDockerProgrammingGrader(concurrency int) ProgrammingGrader {
 }
 
 func NewHubGrader(svc *autograder_grpc.GraderHubService) ProgrammingGrader {
-	return &HubGrader{hub: svc}
+	return &HubGrader{hubService: svc}
 }

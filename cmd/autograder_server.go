@@ -96,7 +96,7 @@ func dbInit(db *pebble.DB, email string) bool {
 	rootPassword := RandStringRunes(16)
 	userRepo := repository.NewKVUserRepository(db)
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(rootPassword), bcrypt.DefaultCost)
-	rootUser := &model_pb.User{Username: "root", Password: passwordHash, Email: email, Nickname: "root"}
+	rootUser := &model_pb.User{Username: "root", Password: passwordHash, Email: email, Nickname: "root", IsAdmin: true}
 	_, err = userRepo.CreateUser(context.Background(), rootUser)
 	if err != nil {
 		panic(err)
@@ -110,16 +110,16 @@ func dbInit(db *pebble.DB, email string) bool {
 	return true
 }
 
-type EnvKeyReplacer struct {
+type ServerEnvKeyReplacer struct {
 }
 
-func (r *EnvKeyReplacer) Replace(s string) string {
+func (r *ServerEnvKeyReplacer) Replace(s string) string {
 	v := strings.ReplaceAll(s, ".", "_")
 	return strings.ReplaceAll(v, "-", "_")
 }
 
-func readConfig() {
-	*viper.GetViper() = *viper.NewWithOptions(viper.EnvKeyReplacer(&EnvKeyReplacer{}))
+func serverReadConfig() {
+	*viper.GetViper() = *viper.NewWithOptions(viper.EnvKeyReplacer(&ServerEnvKeyReplacer{}))
 	viper.SetConfigName("config")
 	viper.SetConfigType("toml")
 	viper.AddConfigPath("/etc/autograder-server/")  // path to look for the config file in
@@ -128,7 +128,6 @@ func readConfig() {
 	viper.AutomaticEnv()
 
 	viper.SetDefault("grader.concurrency", 5)
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	err := viper.ReadInConfig()
 	if err != nil {
@@ -192,7 +191,7 @@ func main() {
 		log.Printf("Database is not initialized. Please run autograder-server --init first.")
 		return
 	}
-	readConfig()
+	serverReadConfig()
 	ls := &storage.LocalStorage{}
 	m := mailer.NewSMTPMailer(viper.GetString("smtp.addr"), viper.GetString("smtp.user"), viper.GetString("smtp.pass"))
 	distFS, err := fs.Sub(web.WebResources, "dist")

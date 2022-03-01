@@ -165,6 +165,14 @@ func (a *AutograderService) RequireInCourse(ctx context.Context, req interface{}
 	return context.WithValue(ctx, courseMemberCtxKey{}, member), nil
 }
 
+func (a *AutograderService) RequireAdmin(ctx context.Context, req interface{}) (context.Context, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	if !user.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "NOT_ADMIN")
+	}
+	return ctx, nil
+}
+
 func (a *AutograderService) RequireCourseWrite(ctx context.Context, req interface{}) (context.Context, error) {
 	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
 	if member.GetRole() == model_pb.CourseRole_Reader || member.GetRole() == model_pb.CourseRole_Student {
@@ -247,6 +255,12 @@ func (a *AutograderService) initAuthFuncs() {
 		},
 		{
 			Methods: []string{
+				"GetAllGraders",
+			},
+			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.RequireAdmin},
+		},
+		{
+			Methods: []string{
 				"GetAssignment",
 				"GetAssignmentsInCourse",
 				"GetSubmissionsInAssignment",
@@ -291,6 +305,7 @@ func (a *AutograderService) initAuthFuncs() {
 				"GetFilesInSubmission",
 				"GetSubmissionReport",
 				"SubscribeSubmission",
+				"CancelSubmission",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireSubmissionRead},
 		},

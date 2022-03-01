@@ -225,4 +225,5 @@ message GraderStatusMetadata {
   GraderInfo info = 1;
   string ip = 2;
   Status status = 3;
+  google.protobuf.Timestamp last_heartbeat = 4;
 }
