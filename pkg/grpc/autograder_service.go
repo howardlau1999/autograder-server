@@ -547,7 +547,7 @@ func (a *AutograderService) CreateAssignment(
 	assignment.Description = request.GetDescription()
 	assignment.CourseId = request.GetCourseId()
 	assignment.ProgrammingConfig = request.GetProgrammingConfig()
-	if len(assignment.Name) == 0 {
+	if len(assignment.Name) == 0 || len(assignment.Name) > 256 {
 		return nil, status.Error(codes.InvalidArgument, "NAME")
 	}
 	if len(assignment.Description) == 0 || len(assignment.Description) > 1024*1024 {

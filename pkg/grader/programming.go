@@ -186,7 +186,8 @@ func (d *DockerProgrammingGrader) runDocker(
 	}
 	netCfg := &network.NetworkingConfig{}
 	platform := &specs.Platform{Architecture: "amd64", OS: "linux"}
-	body, err := d.cli.ContainerCreate(ctx, ctCfg, hstCfg, netCfg, platform, "")
+	var body container.ContainerCreateCreatedBody
+	body, err = d.cli.ContainerCreate(ctx, ctCfg, hstCfg, netCfg, platform, "")
 	if err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
@@ -198,6 +199,16 @@ func (d *DockerProgrammingGrader) runDocker(
 	}
 	containerId := body.ID
 	logger = logger.With(zap.String("containerId", containerId))
+	defer func() {
+		go func() {
+			logger.Debug("Docker.Run.RemoveContainer")
+			if err := d.cli.ContainerRemove(
+				context.Background(), containerId, types.ContainerRemoveOptions{Force: true},
+			); err != nil {
+				logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
+			}
+		}()
+	}()
 	logger.Debug("Docker.Run.ContainerCreated")
 	doneC, errC := d.cli.ContainerWait(ctx, containerId, container.WaitConditionNextExit)
 	err = d.cli.ContainerStart(ctx, containerId, types.ContainerStartOptions{})
@@ -228,23 +239,9 @@ func (d *DockerProgrammingGrader) runDocker(
 		return
 	case <-ctx.Done():
 		err = ctx.Err()
-		go func() {
-			if err := d.cli.ContainerRemove(
-				context.Background(), containerId, types.ContainerRemoveOptions{Force: true},
-			); err != nil {
-				logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
-			}
-		}()
 		return
 	case <-ticker.C:
 		internalError = ErrTimeout
-		go func() {
-			if err := d.cli.ContainerRemove(
-				context.Background(), containerId, types.ContainerRemoveOptions{Force: true},
-			); err != nil {
-				logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
-			}
-		}()
 		return
 	case <-doneC:
 		logger.Debug("Docker.Run.ContainerExited")
@@ -260,13 +257,6 @@ func (d *DockerProgrammingGrader) runDocker(
 		return
 	}
 	exitCode = int64(containerDetail.State.ExitCode)
-	go func() {
-		err = d.cli.ContainerRemove(ctx, containerId, types.ContainerRemoveOptions{})
-		if err != nil {
-			logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
-			return
-		}
-	}()
 	return
 }
 
