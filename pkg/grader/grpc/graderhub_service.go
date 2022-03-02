@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -18,12 +19,32 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+type GradeRequestQueue struct {
+	mu       *sync.Mutex
+	cond     *sync.Cond
+	requests []*grader_pb.GradeRequest
+	closed   bool
+}
+
+func (q *GradeRequestQueue) Close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.closed = true
+	q.cond.Broadcast()
+}
+
+func NewGradeRequestQueue() *GradeRequestQueue {
+	mu := &sync.Mutex{}
+	cond := sync.NewCond(mu)
+	return &GradeRequestQueue{mu: mu, cond: cond}
+}
+
 type GraderHubService struct {
 	grader_pb.UnimplementedGraderHubServiceServer
 	graderRepo           repository.GraderRepository
 	submissionReportRepo repository.SubmissionReportRepository
-	requestChsMu         *sync.Mutex
-	gradeRequestChs      map[uint64]chan *grader_pb.GradeRequest
+	gradeRequestMu       *sync.Mutex
+	gradeRequestQueues   map[uint64]*GradeRequestQueue
 
 	onlineMu      *sync.Mutex
 	onlineGraders map[uint64]*model_pb.GraderStatusMetadata
@@ -83,18 +104,36 @@ func (g *GraderHubService) onGraderOffline(graderId uint64) {
 	delete(g.onlineGraders, graderId)
 	g.onlineMu.Unlock()
 
+	g.gradeRequestMu.Lock()
+	queue := g.gradeRequestQueues[graderId]
+	delete(g.gradeRequestQueues, graderId)
+	g.gradeRequestMu.Unlock()
+
+	if queue != nil {
+		queue.Close()
+	}
+
 	submissions, _ := g.graderRepo.GetSubmissionsByGrader(context.Background(), graderId)
 	for _, subId := range submissions {
 		_ = g.graderRepo.ReleaseSubmission(context.Background(), subId)
+		g.runningMu.Lock()
+		if req := g.runningList[subId]; req != nil {
+			g.queueGradeRequest(req)
+			delete(g.runningList, subId)
+		}
+		g.runningMu.Unlock()
 	}
 
-	for _, subId := range submissions {
-		g.runningMu.Lock()
-		req, ok := g.runningList[subId]
-		g.runningMu.Unlock()
-		if ok {
-			g.requeueGradeRequest(req)
+	if queue != nil {
+		queue.mu.Lock()
+		for _, req := range queue.requests {
+			g.runningMu.Lock()
+			delete(g.runningList, req.SubmissionId)
+			g.runningMu.Unlock()
+			g.queueGradeRequest(req)
 		}
+		queue.requests = nil
+		queue.mu.Unlock()
 	}
 }
 
@@ -120,19 +159,15 @@ func (g *GraderHubService) graderMonitor(graderId uint64, alive chan *time.Time)
 					logger.Warn("Grader.Monitor.ExpiredHeartbeat", zap.Time("heartbeatTs", *t))
 					continue
 				}
-				oldStatus := grader.Status
 				grader.Status = model_pb.GraderStatusMetadata_Online
 				grader.LastHeartbeat = timestamppb.New(*t)
 				g.onlineMu.Lock()
 				g.onlineGraders[graderId] = grader
 				g.onlineMu.Unlock()
-				if oldStatus != grader.Status {
-					g.onlineCond.Broadcast()
-				}
 			} else {
 				logger.Warn("Grader.Monitor.GraderOffline")
 				grader.Status = model_pb.GraderStatusMetadata_Offline
-				go g.onGraderOffline(graderId)
+				g.onGraderOffline(graderId)
 			}
 			err = g.graderRepo.UpdateGrader(context.Background(), graderId, grader)
 			if err != nil {
@@ -152,12 +187,12 @@ func (g *GraderHubService) graderMonitor(graderId uint64, alive chan *time.Time)
 				logger.Warn("Grader.Monitor.Timeout")
 				grader.Status = model_pb.GraderStatusMetadata_Unknown
 				err = g.graderRepo.UpdateGrader(context.Background(), graderId, grader)
-				go g.onGraderUnknown(graderId)
+				g.onGraderUnknown(graderId)
 			} else if grader.Status == model_pb.GraderStatusMetadata_Unknown {
 				if t.After(grader.LastHeartbeat.AsTime().Add(30 * time.Second)) {
 					logger.Error("Grader.Monitor.Timeout.Offline")
 					grader.Status = model_pb.GraderStatusMetadata_Offline
-					go g.onGraderOffline(graderId)
+					g.onGraderOffline(graderId)
 				}
 				err = g.graderRepo.UpdateGrader(context.Background(), graderId, grader)
 			}
@@ -237,7 +272,6 @@ func (g *GraderHubService) onSubmissionQueued(submissionId uint64) {
 		}
 		g.onlineCond.Wait()
 	}
-	var ch chan *grader_pb.GradeRequest
 	g.queuedMu.Lock()
 	request = g.queuedList[submissionId]
 	if request == nil {
@@ -245,28 +279,35 @@ func (g *GraderHubService) onSubmissionQueued(submissionId uint64) {
 		g.onSubmissionCancelled(submissionId)
 		return
 	}
-	g.onSubmissionScheduled(submissionId, graderId)
+	var queue *GradeRequestQueue
 	delete(g.queuedList, submissionId)
-	g.queuedMu.Unlock()
-
-	g.requestChsMu.Lock()
-	ch = g.gradeRequestChs[graderId]
-	g.requestChsMu.Unlock()
-
+	g.gradeRequestMu.Lock()
+	queue = g.gradeRequestQueues[graderId]
+	g.gradeRequestMu.Unlock()
+	if queue != nil {
+		queue.mu.Lock()
+		if queue.closed {
+			g.queuedMu.Unlock()
+			queue.mu.Unlock()
+			g.onSubmissionQueued(submissionId)
+			return
+		}
+		queue.requests = append(queue.requests, request)
+		queue.cond.Signal()
+		queue.mu.Unlock()
+	}
 	g.runningMu.Lock()
 	g.runningList[submissionId] = request
 	g.runningMu.Unlock()
-
-	ch <- request
+	g.onSubmissionScheduled(submissionId, graderId)
+	delete(g.queuedList, submissionId)
+	g.queuedMu.Unlock()
 }
 
 func (g *GraderHubService) Grade(
 	ctx context.Context, request *grader_pb.GradeRequest,
 ) (*grader_pb.GradeCallbackResponse, error) {
-	g.queuedMu.Lock()
-	g.queuedList[request.SubmissionId] = request
-	g.queuedMu.Unlock()
-	go g.onSubmissionQueued(request.SubmissionId)
+	g.queueGradeRequest(request)
 	return &grader_pb.GradeCallbackResponse{}, nil
 }
 
@@ -281,6 +322,8 @@ func (g *GraderHubService) RegisterGrader(
 	hostname := request.GetInfo().GetHostname()
 	logger := zap.L().With(zap.String("ip", ip), zap.String("hostname", hostname))
 	logger.Debug("GraderHub.GraderRegister")
+	g.onlineMu.Lock()
+	defer g.onlineMu.Unlock()
 	grader, graderId, err := g.graderRepo.GetGraderByName(ctx, hostname)
 	if err != nil && err != pebble.ErrNotFound {
 		return nil, status.Error(codes.Internal, "GET_GRADER")
@@ -297,10 +340,11 @@ func (g *GraderHubService) RegisterGrader(
 			logger.Error("GraderHub.GraderRegister.CreateGrader", zap.Uint64("graderId", graderId), zap.Error(err))
 			return nil, status.Error(codes.Internal, "CREATE_GRADER")
 		}
-		g.onlineMu.Lock()
 		g.onlineGraders[graderId] = metadata
-		g.onlineMu.Unlock()
 		return &grader_pb.RegisterGraderResponse{GraderId: graderId}, nil
+	}
+	if grader.Status == model_pb.GraderStatusMetadata_Online {
+		return nil, status.Error(codes.AlreadyExists, fmt.Sprintf("'%s' is already taken by %s", hostname, grader.Ip))
 	}
 	grader.Status = model_pb.GraderStatusMetadata_Online
 	grader.Ip = ip
@@ -309,13 +353,11 @@ func (g *GraderHubService) RegisterGrader(
 	if err := g.graderRepo.UpdateGrader(ctx, graderId, grader); err != nil {
 		logger.Error("GraderHub.GraderRegister.UpdateGrader", zap.Uint64("graderId", graderId), zap.Error(err))
 	}
-	g.onlineMu.Lock()
 	g.onlineGraders[graderId] = grader
-	g.onlineMu.Unlock()
 	return &grader_pb.RegisterGraderResponse{GraderId: graderId}, nil
 }
 
-func (g *GraderHubService) requeueGradeRequest(req *grader_pb.GradeRequest) {
+func (g *GraderHubService) queueGradeRequest(req *grader_pb.GradeRequest) {
 	g.queuedMu.Lock()
 	g.queuedList[req.GetSubmissionId()] = req
 	g.queuedMu.Unlock()
@@ -327,25 +369,38 @@ func (g *GraderHubService) GraderHeartbeat(server grader_pb.GraderHubService_Gra
 	graderId := uint64(0)
 	var tCh chan *time.Time
 	// Write Loop
-	requestLoop := func(graderId uint64, ch chan *grader_pb.GradeRequest) {
+	requestLoop := func(graderId uint64, queue *GradeRequestQueue) {
 		logger := zap.L().With(zap.Uint64("graderId", graderId))
-		for r := range ch {
-			logger.Debug("GraderHeartbeat.SendGradeRequest", zap.Stringer("request", r))
-			err := server.Send(&grader_pb.GraderHeartbeatResponse{Requests: []*grader_pb.GradeRequest{r}})
-			if err != nil {
-				logger.Error("GraderHeartbeat.Send", zap.Error(err))
-				go func(req *grader_pb.GradeRequest) {
-					time.Sleep(1 * time.Second)
-					g.requeueGradeRequest(req)
-				}(r)
+		var err error
+		for {
+			queue.mu.Lock()
+			if !queue.closed && len(queue.requests) == 0 {
+				queue.cond.Wait()
+			}
+			if queue.closed && len(queue.requests) == 0 {
+				queue.mu.Unlock()
 				break
 			}
-		}
-		for r := range ch {
-			go func(req *grader_pb.GradeRequest) {
-				time.Sleep(1 * time.Second)
-				g.requeueGradeRequest(req)
-			}(r)
+			requests := make([]*grader_pb.GradeRequest, len(queue.requests), len(queue.requests))
+			copy(requests, queue.requests)
+			queue.requests = nil
+			queue.mu.Unlock()
+			var i int
+			for i = 0; i < len(requests); i++ {
+				r := requests[i]
+				logger.Debug("GraderHeartbeat.SendGradeRequest", zap.Stringer("request", r))
+				err = server.Send(&grader_pb.GraderHeartbeatResponse{Requests: []*grader_pb.GradeRequest{r}})
+				if err != nil {
+					logger.Error("GraderHeartbeat.Send", zap.Error(err))
+					break
+				}
+			}
+			if err != nil {
+				for j := i; i < len(requests); j++ {
+					g.queueGradeRequest(requests[j])
+				}
+				break
+			}
 		}
 		logger.Info("GraderHeartbeat.RequestLoop.Exit")
 	}
@@ -362,23 +417,24 @@ func (g *GraderHubService) GraderHeartbeat(server grader_pb.GraderHubService_Gra
 			"GraderHeartbeat.RecvMsg", zap.Uint64("graderId", heartbeatRecv.GraderId),
 			zap.Time("time", heartbeatRecv.Time.AsTime()),
 		)
+		g.onlineMu.Lock()
+		if _, ok := g.onlineGraders[heartbeatRecv.GraderId]; !ok {
+			g.onlineMu.Unlock()
+			return status.Error(codes.NotFound, "GRADER_NOT_REGISTERED")
+		}
+		g.onlineMu.Unlock()
 		if graderId == 0 {
 			graderId = heartbeatRecv.GraderId
-			g.onlineMu.Lock()
-			if _, ok := g.onlineGraders[graderId]; !ok {
-				g.onlineMu.Unlock()
-				return status.Error(codes.NotFound, "GRADER_NOT_REGISTERED")
-			}
-			g.onlineMu.Unlock()
-			g.onlineCond.Broadcast()
 			zap.L().Info("GraderHeartbeat.First", zap.Uint64("graderId", graderId))
-			ch := make(chan *grader_pb.GradeRequest)
 
-			g.requestChsMu.Lock()
-			g.gradeRequestChs[heartbeatRecv.GraderId] = ch
-			g.requestChsMu.Unlock()
+			queue := NewGradeRequestQueue()
+			g.gradeRequestMu.Lock()
+			g.gradeRequestQueues[heartbeatRecv.GraderId] = queue
+			g.gradeRequestMu.Unlock()
 
-			go requestLoop(graderId, ch)
+			go requestLoop(graderId, queue)
+			// The scheduler may have a chance to schedule a grade task now
+			g.onlineCond.Broadcast()
 
 			g.monitorMu.Lock()
 			tCh = g.monitorChs[graderId]
@@ -393,13 +449,11 @@ func (g *GraderHubService) GraderHeartbeat(server grader_pb.GraderHubService_Gra
 		tCh <- &t
 	}
 	zap.L().Info("GraderHeartbeat.ReadLoop.Exit", zap.Uint64("graderId", graderId))
-	if graderId != 0 {
-		g.requestChsMu.Lock()
-		close(g.gradeRequestChs[heartbeatRecv.GraderId])
-		delete(g.gradeRequestChs, heartbeatRecv.GraderId)
-		g.requestChsMu.Unlock()
-	}
-	go func() { tCh <- nil }()
+	go func() {
+		if tCh != nil {
+			tCh <- nil
+		}
+	}()
 	return nil
 }
 
@@ -479,8 +533,9 @@ func (g *GraderHubService) closeAllSubmissionSubscribers(submissionId uint64) {
 func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_GradeCallbackServer) error {
 	r := &grader_pb.GradeResponse{}
 	var submissionId uint64
+	var err error
 	for {
-		err := server.RecvMsg(r)
+		err = server.RecvMsg(r)
 		if err != nil {
 			break
 		}
@@ -508,7 +563,9 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 			break
 		}
 	}
-	g.onSubmissionFinished(submissionId)
+	if err == nil {
+		g.onSubmissionFinished(submissionId)
+	}
 	return nil
 }
 
@@ -519,7 +576,6 @@ func (g *GraderHubService) CancelGrade(
 	g.queuedMu.Lock()
 	if _, ok := g.queuedList[submissionId]; ok {
 		delete(g.queuedList, submissionId)
-		g.onlineCond.Broadcast()
 		g.onSubmissionCancelled(submissionId)
 		g.queuedMu.Unlock()
 		return nil
@@ -528,14 +584,25 @@ func (g *GraderHubService) CancelGrade(
 	// Running
 	graderId, err := g.graderRepo.GetGraderIdBySubmissionId(ctx, submissionId)
 	if err != nil {
-		return status.Error(codes.Internal, "GET_GRADER")
+		g.onSubmissionCancelled(submissionId)
+		return nil
 	}
-	var ch chan *grader_pb.GradeRequest
-	g.requestChsMu.Lock()
-	ch = g.gradeRequestChs[graderId]
-	g.requestChsMu.Unlock()
-	if ch != nil {
-		ch <- &grader_pb.GradeRequest{IsCancel: true, SubmissionId: submissionId}
+	var queue *GradeRequestQueue
+	g.gradeRequestMu.Lock()
+	queue = g.gradeRequestQueues[graderId]
+	g.gradeRequestMu.Unlock()
+	if queue != nil {
+		req := &grader_pb.GradeRequest{IsCancel: true, SubmissionId: submissionId}
+		queue.mu.Lock()
+		if !queue.closed {
+			g.onSubmissionCancelling(submissionId)
+			queue.requests = append(queue.requests, req)
+			queue.mu.Unlock()
+			queue.cond.Signal()
+			return nil
+		}
+		queue.mu.Unlock()
+		g.onSubmissionCancelled(submissionId)
 	} else {
 		g.onSubmissionCancelled(submissionId)
 	}
@@ -549,7 +616,7 @@ func NewGraderHubService(db *pebble.DB, srr repository.SubmissionReportRepositor
 		submissionReportRepo: srr,
 		monitorMu:            &sync.Mutex{},
 		onlineMu:             &sync.Mutex{},
-		requestChsMu:         &sync.Mutex{},
+		gradeRequestMu:       &sync.Mutex{},
 		subsMu:               &sync.Mutex{},
 		queuedMu:             &sync.Mutex{},
 		runningMu:            &sync.Mutex{},
@@ -557,7 +624,7 @@ func NewGraderHubService(db *pebble.DB, srr repository.SubmissionReportRepositor
 		queuedList:           map[uint64]*grader_pb.GradeRequest{},
 		onlineGraders:        map[uint64]*model_pb.GraderStatusMetadata{},
 		submissionSubs:       map[uint64][]chan *grader_pb.GradeReport{},
-		gradeRequestChs:      map[uint64]chan *grader_pb.GradeRequest{},
+		gradeRequestQueues:   map[uint64]*GradeRequestQueue{},
 		monitorChs:           map[uint64]chan *time.Time{},
 	}
 	svc.onlineCond = sync.NewCond(svc.onlineMu)

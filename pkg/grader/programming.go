@@ -105,7 +105,7 @@ func (d *DockerProgrammingGrader) runDocker(
 	ctx context.Context, submissionId uint64, submission *model_pb.Submission,
 	config *model_pb.ProgrammingAssignmentConfig,
 ) (internalError int64, exitCode int64, resultsJSONPath string, err error) {
-	logger := zap.L().With(zap.Uint64("submissionId", submissionId))
+	logger := zap.L().With(zap.Uint64("submissionId", submissionId), zap.String("image", config.Image))
 	logger.Debug("Docker.Run.Enter")
 	defer logger.Debug("Docker.Run.Exit")
 	var imgs []types.ImageSummary
@@ -199,17 +199,7 @@ func (d *DockerProgrammingGrader) runDocker(
 	}
 	containerId := body.ID
 	logger = logger.With(zap.String("containerId", containerId))
-	defer func() {
-		go func() {
-			if err := d.cli.ContainerRemove(
-				context.Background(), containerId, types.ContainerRemoveOptions{Force: true},
-			); err != nil {
-				logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
-				return
-			}
-			logger.Debug("Docker.Run.ContainerRemoved")
-		}()
-	}()
+	defer d.RemoveContainer(logger, containerId)
 	logger.Debug("Docker.Run.ContainerCreated")
 	doneC, errC := d.cli.ContainerWait(ctx, containerId, container.WaitConditionNextExit)
 	err = d.cli.ContainerStart(ctx, containerId, types.ContainerStartOptions{})
@@ -261,6 +251,18 @@ func (d *DockerProgrammingGrader) runDocker(
 	return
 }
 
+func (d *DockerProgrammingGrader) RemoveContainer(logger *zap.Logger, containerId string) {
+	go func() {
+		if err := d.cli.ContainerRemove(
+			context.Background(), containerId, types.ContainerRemoveOptions{Force: true},
+		); err != nil {
+			logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
+			return
+		}
+		logger.Debug("Docker.Run.ContainerRemoved")
+	}()
+}
+
 func (d *DockerProgrammingGrader) GradeSubmission(
 	ctx context.Context,
 	submissionId uint64, submission *model_pb.Submission,
@@ -299,7 +301,7 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 	resultsPB := &model_pb.SubmissionReport{}
 	var json []byte
 	var resultsJSON *os.File
-	if internalError == 0 && exitCode == 0 {
+	if internalError == 0 {
 		resultsJSON, err = os.Open(resultsJSONPath)
 		if err != nil {
 			internalError = ErrOpenResultJSON
@@ -358,7 +360,7 @@ WriteReport:
 	}
 }
 
-func NewDockerProgrammingGrader(concurrency int) ProgrammingGrader {
+func NewDockerProgrammingGrader(concurrency int) *DockerProgrammingGrader {
 	mu := &sync.Mutex{}
 	cond := sync.NewCond(mu)
 	cli, err := client.NewClientWithOpts(client.FromEnv)
@@ -368,6 +370,6 @@ func NewDockerProgrammingGrader(concurrency int) ProgrammingGrader {
 	return &DockerProgrammingGrader{cli: cli, mu: mu, cond: cond, concurrency: concurrency}
 }
 
-func NewHubGrader(svc *autograder_grpc.GraderHubService) ProgrammingGrader {
+func NewHubGrader(svc *autograder_grpc.GraderHubService) *HubGrader {
 	return &HubGrader{hubService: svc}
 }

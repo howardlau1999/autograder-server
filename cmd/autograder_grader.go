@@ -13,7 +13,9 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -195,10 +197,13 @@ func (g *GraderWorker) WorkLoop() {
 	}
 	zap.L().Info("Grader.RegisterRequest", zap.Stringer("request", registerRequest))
 	g.client = client
-	g.dockerGrader = grader.NewDockerProgrammingGrader(int(concurrency))
 	for {
 		resp, err := client.RegisterGrader(context.Background(), registerRequest)
 		if err != nil {
+			if status.Code(err) == codes.AlreadyExists {
+				zap.L().Error("Grader.Register.NameAlreadyExists", zap.Error(err))
+				return
+			}
 			zap.L().Error("Grader.Register", zap.Error(err))
 			time.Sleep(3 * time.Second)
 			continue

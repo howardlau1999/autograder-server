@@ -917,6 +917,15 @@ func (a *AutograderService) SubscribeSubmission(
 	a.reportSubs[id] = append(a.reportSubs[id], c)
 	idx = len(a.reportSubs[id]) - 1
 	a.subsMu.Unlock()
+	brief, _ = a.submissionReportRepo.GetSubmissionBriefReport(server.Context(), id)
+	err = server.Send(
+		&autograder_pb.SubscribeSubmissionResponse{
+			Score: brief.GetScore(), MaxScore: brief.GetMaxScore(), Status: brief.GetStatus(),
+		},
+	)
+	if err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-server.Context().Done():
