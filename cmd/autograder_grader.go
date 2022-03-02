@@ -60,7 +60,7 @@ func graderReadConfig() {
 
 	err = viper.ReadInConfig()
 	if err != nil {
-		panic(err)
+		zap.L().Error("ReadConfig", zap.Error(err))
 	}
 }
 

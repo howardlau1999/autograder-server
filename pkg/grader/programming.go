@@ -52,7 +52,10 @@ func (h *HubGrader) GradeSubmission(
 		Submission:   submission,
 		Config:       config,
 	}
-	h.hubService.Grade(ctx, request)
+	_, err := h.hubService.Grade(ctx, request)
+	if err != nil {
+		zap.L().Error("GraderHub.GradeSubmission", zap.Error(err))
+	}
 	if notifyC != nil {
 		h.hubService.SubscribeSubmission(submissionId, notifyC)
 	}
@@ -84,6 +87,20 @@ func (d *DockerProgrammingGrader) PullImage(image string) error {
 	return err
 }
 
+const (
+	ErrListImage             = -1
+	ErrPullImage             = 1
+	ErrReadPullImageResponse = 2
+	ErrCreateContainer       = 3
+	ErrStartContainer        = 4
+	ErrWaitContainer         = 5
+	ErrInspectContainer      = 6
+	ErrTimeout               = 7
+	ErrOpenResultJSON        = 8
+	ErrReadResultJSON        = 9
+	ErrUnmarshalResultJSON   = 10
+)
+
 func (d *DockerProgrammingGrader) runDocker(
 	ctx context.Context, submissionId uint64, submission *model_pb.Submission,
 	config *model_pb.ProgrammingAssignmentConfig,
@@ -99,7 +116,7 @@ func (d *DockerProgrammingGrader) runDocker(
 		},
 	)
 	if err != nil {
-		internalError = -1
+		internalError = ErrListImage
 		logger.Error("Docker.Run.ListImage", zap.Error(err))
 		return
 	}
@@ -111,7 +128,7 @@ func (d *DockerProgrammingGrader) runDocker(
 				err = ctx.Err()
 				return
 			}
-			internalError = 1
+			internalError = ErrPullImage
 			logger.Error("Docker.Run.PullImage", zap.Error(err))
 			return
 		}
@@ -121,7 +138,7 @@ func (d *DockerProgrammingGrader) runDocker(
 				err = ctx.Err()
 				return
 			}
-			internalError = 2
+			internalError = ErrReadPullImageResponse
 			logger.Error("Docker.Run.PullImage.ReadAll", zap.Error(err))
 			return
 		}
@@ -175,7 +192,7 @@ func (d *DockerProgrammingGrader) runDocker(
 			err = ctx.Err()
 			return
 		}
-		internalError = 3
+		internalError = ErrCreateContainer
 		logger.Error("Docker.Run.CreateContainer", zap.Error(err))
 		return
 	}
@@ -189,7 +206,7 @@ func (d *DockerProgrammingGrader) runDocker(
 			err = ctx.Err()
 			return
 		}
-		internalError = 4
+		internalError = ErrStartContainer
 		logger.Error("Docker.Run.StartContainer")
 		return
 	}
@@ -206,7 +223,7 @@ func (d *DockerProgrammingGrader) runDocker(
 			err = ctx.Err()
 			return
 		}
-		internalError = 5
+		internalError = ErrWaitContainer
 		logger.Error("Docker.Run.WaitContainer")
 		return
 	case <-ctx.Done():
@@ -220,7 +237,7 @@ func (d *DockerProgrammingGrader) runDocker(
 		}()
 		return
 	case <-ticker.C:
-		internalError = 7
+		internalError = ErrTimeout
 		go func() {
 			if err := d.cli.ContainerRemove(
 				context.Background(), containerId, types.ContainerRemoveOptions{Force: true},
@@ -235,9 +252,10 @@ func (d *DockerProgrammingGrader) runDocker(
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	containerDetail, err := d.cli.ContainerInspect(ctx, containerId)
+	var containerDetail types.ContainerJSON
+	containerDetail, err = d.cli.ContainerInspect(ctx, containerId)
 	if err != nil {
-		internalError = 6
+		internalError = ErrInspectContainer
 		logger.Error("Docker.Run.InspectContainer", zap.Error(err))
 		return
 	}
@@ -293,20 +311,25 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 	if internalError == 0 && exitCode == 0 {
 		resultsJSON, err = os.Open(resultsJSONPath)
 		if err != nil {
-			internalError = 8
+			internalError = ErrOpenResultJSON
 			logger.Error("Result.Open", zap.Error(err))
 			goto WriteReport
 		}
-		defer resultsJSON.Close()
+		defer func(resultsJSON *os.File) {
+			err := resultsJSON.Close()
+			if err != nil {
+				logger.Error("Result.Close", zap.Error(err))
+			}
+		}(resultsJSON)
 		json, err = ioutil.ReadAll(resultsJSON)
 		if err != nil {
-			internalError = 9
+			internalError = ErrReadResultJSON
 			logger.Error("Result.ReadAll", zap.Error(err))
 			goto WriteReport
 		}
 		err = protojson.Unmarshal(json, resultsPB)
 		if err != nil {
-			internalError = 10
+			internalError = ErrUnmarshalResultJSON
 			logger.Error("Result.Unmarshal", zap.Error(err))
 			goto WriteReport
 		}
