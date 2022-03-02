@@ -201,12 +201,13 @@ func (d *DockerProgrammingGrader) runDocker(
 	logger = logger.With(zap.String("containerId", containerId))
 	defer func() {
 		go func() {
-			logger.Debug("Docker.Run.RemoveContainer")
 			if err := d.cli.ContainerRemove(
 				context.Background(), containerId, types.ContainerRemoveOptions{Force: true},
 			); err != nil {
 				logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
+				return
 			}
+			logger.Debug("Docker.Run.ContainerRemoved")
 		}()
 	}()
 	logger.Debug("Docker.Run.ContainerCreated")

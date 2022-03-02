@@ -160,12 +160,11 @@ func (g *GraderWorker) gradeOneSubmission(
 	g.mu.Lock()
 	g.cancelChs[req.SubmissionId] = cancel
 	g.mu.Unlock()
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
+	logger := zap.L().With(zap.Uint64("submissionId", req.GetSubmissionId()))
 	go g.submissionReporter(req.SubmissionId, buffer)
 	go g.dockerGrader.GradeSubmission(ctx, req.GetSubmissionId(), req.GetSubmission(), req.GetConfig(), notifyC)
 	for r := range notifyC {
-		zap.L().Debug("Grader.ProgressReport", zap.Stringer("report", r))
+		logger.Debug("Grader.ProgressReport", zap.Stringer("brief", r.Brief))
 		buffer.Send(r)
 	}
 	cancel()
