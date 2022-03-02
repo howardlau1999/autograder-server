@@ -522,7 +522,7 @@ func (a *AutograderService) DeleteFileInManifest(
 	}
 	manifestId := request.GetManifestId()
 	err := a.ls.Delete(ctx, filepath.Join(a.getManifestPath(manifestId), filename))
-	if err != nil {
+	if err != nil && err != os.ErrNotExist {
 		return nil, status.Error(codes.InvalidArgument, "DELETE_FAILED")
 	}
 	return &autograder_pb.DeleteFileInManifestResponse{}, nil
@@ -550,7 +550,7 @@ func (a *AutograderService) CreateAssignment(
 	if len(assignment.Name) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "NAME")
 	}
-	if len(assignment.Description) == 0 {
+	if len(assignment.Description) == 0 || len(assignment.Description) > 1024*1024 {
 		return nil, status.Error(codes.InvalidArgument, "DESCRIPTION")
 	}
 	if assignment.GetDueDate().AsTime().Before(assignment.GetReleaseDate().AsTime()) {
@@ -739,7 +739,11 @@ func (a *AutograderService) GetAssignment(
 	assignment, err := a.assignmentRepo.GetAssignment(ctx, request.GetAssignmentId())
 	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
 	anonymous := a.leaderboardRepo.GetLeaderboardAnonymous(ctx, request.GetAssignmentId())
-	resp := &autograder_pb.GetAssignmentResponse{Assignment: assignment, Role: member.GetRole(), Anonymous: anonymous}
+	role := member.GetRole()
+	if role == model_pb.CourseRole_Student || role == model_pb.CourseRole_Reader {
+		assignment.ProgrammingConfig = nil
+	}
+	resp := &autograder_pb.GetAssignmentResponse{Assignment: assignment, Role: role, Anonymous: anonymous}
 	return resp, err
 }
 
