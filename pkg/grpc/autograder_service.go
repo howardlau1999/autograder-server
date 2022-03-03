@@ -776,7 +776,7 @@ func (a *AutograderService) CreateManifest(
 	ctx context.Context, request *autograder_pb.CreateManifestRequest,
 ) (*autograder_pb.CreateManifestResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
-	id, err := a.manifestRepo.CreateManifest(user.GetUserId(), request.GetAssignmentId())
+	id, err := a.manifestRepo.CreateManifest(nil, user.GetUserId(), request.GetAssignmentId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "CREATE_MANIFEST")
 	}
@@ -792,11 +792,11 @@ func (a *AutograderService) CreateSubmission(
 	assignmentId := request.GetAssignmentId()
 	submitters := request.GetSubmitters()
 	submissionPath := a.getManifestPath(manifestId)
-	files, err := a.manifestRepo.GetFilesInManifest(manifestId)
+	files, err := a.manifestRepo.GetFilesInManifest(nil, manifestId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "MANIFEST_FILES")
 	}
-	err = a.manifestRepo.DeleteManifest(manifestId)
+	err = a.manifestRepo.DeleteManifest(nil, manifestId)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "DELETE_MANIFEST")
 	}
@@ -819,7 +819,7 @@ func (a *AutograderService) CreateSubmission(
 	if err != nil {
 		return nil, status.Error(codes.Internal, "MARK_UNFINISHED")
 	}
-	err = a.manifestRepo.DeleteManifest(manifestId)
+	err = a.manifestRepo.DeleteManifest(nil, manifestId)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "DELETE_MANIFEST")
 	}
@@ -863,7 +863,7 @@ func (a *AutograderService) InitUpload(
 
 		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
 	}
-	_, err := a.manifestRepo.AddFileToManifest(filename, request.GetManifestId())
+	_, err := a.manifestRepo.AddFileToManifest(nil, filename, request.GetManifestId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "ADD_FILES")
 	}
@@ -1757,6 +1757,20 @@ func (a *AutograderService) CancelSubmission(
 	return &autograder_pb.CancelSubmissionResponse{}, nil
 }
 
+func (a *AutograderService) manifestGarbageCollect() {
+	ctx := context.Background()
+	ch := make(chan uint64)
+	zap.L().Debug("Manifest.GC.Start")
+	go a.manifestRepo.GarbageCollect(ctx, ch)
+	for manifestId := range ch {
+		manifestPath := a.getManifestPath(manifestId)
+		err := a.ls.Delete(ctx, manifestPath)
+		if err != nil {
+			zap.L().Error("Manifest.GC.DeleteFile", zap.String("manifestPath", manifestPath), zap.Error(err))
+		}
+	}
+}
+
 func NewAutograderServiceServer(
 	db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client,
 	ghOauth2Config *oauth2.Config,
@@ -1783,5 +1797,6 @@ func NewAutograderServiceServer(
 	}
 	a.initAuthFuncs()
 	go a.runUnfinishedSubmissions()
+	go a.manifestGarbageCollect()
 	return a
 }

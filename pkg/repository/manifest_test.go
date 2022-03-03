@@ -1,12 +1,13 @@
 package repository
 
 import (
+	"os"
+	"testing"
+
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/vfs"
 	"github.com/google/go-cmp/cmp"
 	"gotest.tools/v3/assert"
-	"os"
-	"testing"
 )
 
 func TestMain(m *testing.M) {
@@ -38,7 +39,7 @@ func TestCreateManifest(t *testing.T) {
 		}
 	}(db)
 	repo := NewKVManifestRepository(db)
-	id, err := repo.CreateManifest(1, 1)
+	id, err := repo.CreateManifest(nil, 1, 1)
 	if err != nil {
 		t.Errorf("failed to create manifest: %v", err)
 		return
@@ -61,7 +62,7 @@ func TestAddFileToManifest(t *testing.T) {
 	}(db)
 
 	repo := NewKVManifestRepository(db)
-	id, err := repo.CreateManifest(1, 1)
+	id, err := repo.CreateManifest(nil, 1, 1)
 	if err != nil {
 		t.Errorf("failed to create manifest: %v", err)
 		return
@@ -72,7 +73,7 @@ func TestAddFileToManifest(t *testing.T) {
 	expectedFiles := []string{"src/scala/CPU.scala", "src/scala/Main.scala"}
 
 	for _, fn := range filesToAdd {
-		_, err = repo.AddFileToManifest(fn, id)
+		_, err = repo.AddFileToManifest(nil, fn, id)
 		if err != nil {
 			t.Errorf("failed to add file: %v", err)
 			return
@@ -80,13 +81,13 @@ func TestAddFileToManifest(t *testing.T) {
 	}
 
 	for _, fn := range filesToDelete {
-		_, err = repo.DeleteFileInManifest(fn, id)
+		_, err = repo.DeleteFileInManifest(nil, fn, id)
 		if err != nil {
 			t.Errorf("failed to delete file: %v", err)
 			return
 		}
 	}
-	files, err := repo.GetFilesInManifest(id)
+	files, err := repo.GetFilesInManifest(nil, id)
 	if err != nil {
 		t.Errorf("failed to get files in manifest: %v", err)
 		return

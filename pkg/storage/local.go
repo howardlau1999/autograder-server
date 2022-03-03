@@ -2,18 +2,19 @@ package storage
 
 import (
 	"context"
-	uuid "github.com/google/uuid"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
+
+	uuid "github.com/google/uuid"
 )
 
 type LocalStorage struct {
 }
 
 func (ls *LocalStorage) Delete(ctx context.Context, path string) error {
-	return os.Remove(path)
+	return os.RemoveAll(path)
 }
 
 func (ls *LocalStorage) Open(ctx context.Context, path string) (io.ReadCloser, error) {
