@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -15,7 +16,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -32,7 +35,8 @@ type GraderWorker struct {
 	cancelChs    map[uint64]context.CancelFunc
 	mu           *sync.Mutex
 	client       grader_pb.GraderHubServiceClient
-	dockerGrader grader.ProgrammingGrader
+	dockerGrader *grader.DockerProgrammingGrader
+	graderId     uint64
 }
 
 type ReportBuffer struct {
@@ -83,21 +87,54 @@ func (b *ReportBuffer) Send(report *grader_pb.GradeReport) {
 	b.cond.Broadcast()
 }
 
-func sendReports(
-	rpCli grader_pb.GraderHubService_GradeCallbackClient, submissionId uint64, reports *[]*grader_pb.GradeReport,
+func (g *GraderWorker) getMetadataKey(submissionId uint64) []byte {
+	return []byte(fmt.Sprintf("docker:metadata:%d", submissionId))
+}
+
+func (g *GraderWorker) sendReports(
+	rpCli grader_pb.GraderHubService_GradeCallbackClient,
+	submissionId uint64, reports *[]*grader_pb.GradeReport,
 	logger *zap.Logger,
 ) error {
 	var i int
 	var err error
 	for i = 0; i < len(*reports); i++ {
 		report := (*reports)[i]
-		for {
-			err := rpCli.Send(&grader_pb.GradeResponse{SubmissionId: submissionId, Report: report})
+		if report.GetDockerMetadata() != nil {
+			value, err := proto.Marshal(report.GetDockerMetadata())
 			if err != nil {
-				logger.Error("Grader.GradeCallback.Send", zap.Error(err))
-				goto Out
-			} else {
-				break
+				logger.Error("Grader.MarshalMetadata", zap.Error(err))
+				continue
+			}
+			_, err = g.client.PutMetadata(
+				context.Background(), &grader_pb.PutMetadataRequest{
+					Key:      g.getMetadataKey(submissionId),
+					Value:    value,
+					GraderId: g.graderId,
+				},
+			)
+			if err != nil {
+				logger.Error("Grader.PutMetadata", zap.Error(err))
+				continue
+			}
+			continue
+		}
+		if report.Report == nil && report.Brief == nil {
+			continue
+		}
+		submissionStatus := report.GetBrief().GetStatus()
+		err := rpCli.Send(&grader_pb.GradeResponse{SubmissionId: submissionId, Report: report})
+		if err != nil {
+			logger.Error("Grader.GradeCallback.Send", zap.Error(err))
+			goto Out
+		}
+		if submissionStatus == model_pb.SubmissionStatus_Finished || submissionStatus == model_pb.SubmissionStatus_Cancelled || submissionStatus == model_pb.SubmissionStatus_Failed {
+			_, err := g.client.PutMetadata(
+				context.Background(),
+				&grader_pb.PutMetadataRequest{GraderId: g.graderId, Key: g.getMetadataKey(submissionId)},
+			)
+			if err != nil {
+				logger.Error("Grader.DeleteMetadata", zap.Error(err))
 			}
 		}
 	}
@@ -123,7 +160,7 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		err = sendReports(rpCli, submissionId, &reports, logger)
+		err = g.sendReports(rpCli, submissionId, &reports, logger)
 		if err != nil {
 			time.Sleep(1 * time.Second)
 			continue
@@ -144,7 +181,7 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			reports = append(reports, buffer.buffer...)
 			buffer.buffer = nil
 			buffer.mu.Unlock()
-			err = sendReports(rpCli, submissionId, &reports, logger)
+			err = g.sendReports(rpCli, submissionId, &reports, logger)
 			if err != nil {
 				time.Sleep(1 * time.Second)
 				break
@@ -164,9 +201,17 @@ func (g *GraderWorker) gradeOneSubmission(
 	g.mu.Unlock()
 	logger := zap.L().With(zap.Uint64("submissionId", req.GetSubmissionId()))
 	go g.submissionReporter(req.SubmissionId, buffer)
-	go g.dockerGrader.GradeSubmission(ctx, req.GetSubmissionId(), req.GetSubmission(), req.GetConfig(), notifyC)
+	go g.dockerGrader.GradeSubmission(
+		grader.SetGraderLogger(ctx, logger),
+		req.GetSubmissionId(),
+		req.GetSubmission(),
+		req.GetConfig(),
+		notifyC,
+	)
 	for r := range notifyC {
-		logger.Debug("Grader.ProgressReport", zap.Stringer("brief", r.Brief))
+		logger.Debug(
+			"Grader.ProgressReport", zap.Stringer("brief", r.Brief), zap.Stringer("metadata", r.DockerMetadata),
+		)
 		buffer.Send(r)
 	}
 	cancel()
@@ -187,6 +232,7 @@ func (g *GraderWorker) WorkLoop() {
 	}
 	client := grader_pb.NewGraderHubServiceClient(conn)
 	concurrency := uint64(viper.GetUint("grader.concurrency"))
+	g.dockerGrader = grader.NewDockerProgrammingGrader(int(concurrency))
 	registerRequest := &grader_pb.RegisterGraderRequest{
 		Token: "",
 		Info: &model_pb.GraderInfo{
@@ -209,25 +255,61 @@ func (g *GraderWorker) WorkLoop() {
 			continue
 		}
 		graderId = resp.GetGraderId()
-		zap.L().Info("Grader.Registered", zap.Uint64("graderId", graderId))
+		g.graderId = graderId
+		logger := zap.L().With(zap.Uint64("graderId", graderId))
+		logger.Info("Grader.Registered")
+		ctx, cancel := context.WithCancel(context.Background())
+		metadatas, err := client.GetAllMetadata(ctx, &grader_pb.GetAllMetadataRequest{GraderId: graderId})
+		cancel()
+		if err != nil {
+			logger.Error("Grader.GetPreviousMetadata", zap.Error(err))
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		wg := &sync.WaitGroup{}
+		for i := 0; i < len(metadatas.Keys); i++ {
+			key, value := metadatas.Keys[i], metadatas.Values[i]
+			metadataPB := &grader_pb.DockerGraderMetadata{}
+			err := proto.Unmarshal(value, metadataPB)
+			if err != nil {
+				logger.Error("Grader.UnmarshalMetadata", zap.ByteString("key", key), zap.Error(err))
+				continue
+			}
+			submissionId, containerId := metadataPB.SubmissionId, metadataPB.ContainerId
+			l := logger.With(zap.Uint64("submissionId", submissionId), zap.String("containerId", containerId))
+			l.Debug("Grader.RunningSubmission.Found")
+			// Stop all remaining containers
+			// These submissions have already been rescheduled
+			wg.Add(1)
+			go func(l *zap.Logger, containerId string, metadataKey []byte) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				// TODO check error
+				_ = g.dockerGrader.RemoveContainer(ctx, l, containerId)
+				_, _ = g.client.PutMetadata(ctx, &grader_pb.PutMetadataRequest{GraderId: graderId, Key: metadataKey})
+				wg.Done()
+			}(l, metadataPB.ContainerId, key)
+		}
+		wg.Wait()
 		for {
 			quit := false
 			hbCtx, hbCancel := context.WithCancel(context.Background())
+			hbCtx = metadata.AppendToOutgoingContext(hbCtx, "graderId", fmt.Sprintf("%d", graderId))
 			hbCli, err := client.GraderHeartbeat(hbCtx)
 			if err != nil {
-				zap.L().Error("Grader.StartHeartbeat", zap.Error(err))
+				logger.Error("Grader.StartHeartbeat", zap.Error(err))
 				time.Sleep(1 * time.Second)
 				continue
 			}
 			// Heartbeat
 			go func() {
-				zap.L().Debug("Grader.StartHeartbeat")
+				logger.Debug("Grader.StartHeartbeat")
 				timer := time.NewTimer(10 * time.Second)
 				for {
-					zap.L().Debug("Grader.Heartbeat")
+					logger.Debug("Grader.Heartbeat")
 					err := hbCli.Send(&grader_pb.GraderHeartbeatRequest{Time: timestamppb.Now(), GraderId: graderId})
 					if err != nil {
-						zap.L().Error("Grader.Heartbeat", zap.Error(err))
+						logger.Error("Grader.Heartbeat", zap.Error(err))
 						hbCancel()
 						timer.Stop()
 						return
@@ -245,17 +327,17 @@ func (g *GraderWorker) WorkLoop() {
 			// Receive Grade Request
 			for {
 				request, err := hbCli.Recv()
-				zap.L().Debug("Grader.Recv")
+				logger.Debug("Grader.Recv")
 				if err != nil {
 					quit = true
-					zap.L().Error("Grader.Recv", zap.Error(err))
+					logger.Error("Grader.Recv", zap.Error(err))
 					hbCancel()
 					break
 				}
 				gradeReqs := request.GetRequests()
 				for _, req := range gradeReqs {
 					if req.IsCancel {
-						zap.L().Warn("Grader.CancelGrade", zap.Uint64("submissionId", req.GetSubmissionId()))
+						logger.Warn("Grader.CancelGrade", zap.Uint64("submissionId", req.GetSubmissionId()))
 						g.mu.Lock()
 						cancel := g.cancelChs[req.SubmissionId]
 						if cancel != nil {
@@ -264,7 +346,7 @@ func (g *GraderWorker) WorkLoop() {
 						delete(g.cancelChs, req.SubmissionId)
 						g.mu.Unlock()
 					} else {
-						zap.L().Debug("Grader.BeginGrade", zap.Uint64("submissionId", req.GetSubmissionId()))
+						logger.Debug("Grader.BeginGrade", zap.Uint64("submissionId", req.GetSubmissionId()))
 						go g.gradeOneSubmission(req)
 					}
 				}

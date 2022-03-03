@@ -25,6 +25,20 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+type graderLoggerCtxKey struct{}
+
+func SetGraderLogger(ctx context.Context, logger *zap.Logger) context.Context {
+	return context.WithValue(ctx, graderLoggerCtxKey{}, logger)
+}
+
+func GetGraderLogger(ctx context.Context) *zap.Logger {
+	logger := zap.L()
+	if ctxLogger, ok := ctx.Value(graderLoggerCtxKey{}).(*zap.Logger); ok {
+		logger = ctxLogger
+	}
+	return logger
+}
+
 type ProgrammingGrader interface {
 	PullImage(image string) error
 	GradeSubmission(
@@ -103,13 +117,13 @@ const (
 
 func (d *DockerProgrammingGrader) runDocker(
 	ctx context.Context, submissionId uint64, submission *model_pb.Submission,
-	config *model_pb.ProgrammingAssignmentConfig,
+	config *model_pb.ProgrammingAssignmentConfig, containerIdCh chan string,
 ) (internalError int64, exitCode int64, resultsJSONPath string, err error) {
-	logger := zap.L().With(zap.Uint64("submissionId", submissionId), zap.String("image", config.Image))
+	logger := GetGraderLogger(ctx).With(zap.Uint64("submissionId", submissionId), zap.String("image", config.Image))
 	logger.Debug("Docker.Run.Enter")
 	defer logger.Debug("Docker.Run.Exit")
-	var imgs []types.ImageSummary
-	imgs, err = d.cli.ImageList(
+	var images []types.ImageSummary
+	images, err = d.cli.ImageList(
 		ctx, types.ImageListOptions{
 			All:     false,
 			Filters: filters.NewArgs(filters.Arg("reference", fmt.Sprintf("%s", config.Image))),
@@ -120,7 +134,7 @@ func (d *DockerProgrammingGrader) runDocker(
 		logger.Error("Docker.Run.ListImage", zap.Error(err))
 		return
 	}
-	if len(imgs) == 0 {
+	if len(images) == 0 {
 		var closer io.ReadCloser
 		closer, err = d.cli.ImagePull(ctx, config.Image, types.ImagePullOptions{})
 		if err != nil {
@@ -199,8 +213,11 @@ func (d *DockerProgrammingGrader) runDocker(
 	}
 	containerId := body.ID
 	logger = logger.With(zap.String("containerId", containerId))
-	defer d.RemoveContainer(logger, containerId)
+
+	defer d.RemoveContainerBackground(logger, containerId)
 	logger.Debug("Docker.Run.ContainerCreated")
+	containerIdCh <- containerId
+	close(containerIdCh)
 	doneC, errC := d.cli.ContainerWait(ctx, containerId, container.WaitConditionNextExit)
 	err = d.cli.ContainerStart(ctx, containerId, types.ContainerStartOptions{})
 	if err != nil {
@@ -251,16 +268,19 @@ func (d *DockerProgrammingGrader) runDocker(
 	return
 }
 
-func (d *DockerProgrammingGrader) RemoveContainer(logger *zap.Logger, containerId string) {
-	go func() {
-		if err := d.cli.ContainerRemove(
-			context.Background(), containerId, types.ContainerRemoveOptions{Force: true},
-		); err != nil {
-			logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
-			return
-		}
-		logger.Debug("Docker.Run.ContainerRemoved")
-	}()
+func (d *DockerProgrammingGrader) RemoveContainerBackground(logger *zap.Logger, containerId string) {
+	go d.RemoveContainer(context.Background(), logger, containerId)
+}
+
+func (d *DockerProgrammingGrader) RemoveContainer(ctx context.Context, logger *zap.Logger, containerId string) error {
+	if err := d.cli.ContainerRemove(
+		ctx, containerId, types.ContainerRemoveOptions{Force: true},
+	); err != nil {
+		logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
+		return err
+	}
+	logger.Debug("Docker.Run.ContainerRemoved")
+	return nil
 }
 
 func (d *DockerProgrammingGrader) GradeSubmission(
@@ -286,8 +306,17 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 	if notifyC != nil {
 		go func() { notifyC <- &grader_pb.GradeReport{Brief: briefPB} }()
 	}
-	logger := zap.L().With(zap.Uint64("submissionId", submissionId))
-	internalError, exitCode, resultsJSONPath, err := d.runDocker(ctx, submissionId, submission, config)
+	logger := GetGraderLogger(ctx).With(zap.Uint64("submissionId", submissionId))
+	containerIdCh := make(chan string)
+	go func() {
+		containerId := <-containerIdCh
+		notifyC <- &grader_pb.GradeReport{
+			DockerMetadata: &grader_pb.DockerGraderMetadata{
+				SubmissionId: submissionId, ContainerId: containerId,
+			},
+		}
+	}()
+	internalError, exitCode, resultsJSONPath, err := d.runDocker(ctx, submissionId, submission, config, containerIdCh)
 	if err == context.Canceled {
 		briefPB.Status = model_pb.SubmissionStatus_Cancelled
 		notifyC <- &grader_pb.GradeReport{Brief: briefPB}

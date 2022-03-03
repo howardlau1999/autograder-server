@@ -29,12 +29,56 @@ type GraderRepository interface {
 	DeleteGrader(ctx context.Context, graderId uint64) error
 	GetAllGraders(ctx context.Context) ([]uint64, []*model_pb.GraderStatusMetadata, error)
 	GetSubmissionsByGrader(ctx context.Context, graderId uint64) ([]uint64, error)
+	PutMetadata(ctx context.Context, graderId uint64, key []byte, value []byte) error
+	GetMetadata(ctx context.Context, graderId uint64, key []byte) ([]byte, error)
+	DeleteMetadata(ctx context.Context, graderId uint64, key []byte) error
+	GetAllMetadata(ctx context.Context, graderId uint64) ([][]byte, [][]byte, error)
 }
 
 type KVGraderRepository struct {
 	db  *pebble.DB
 	seq Sequencer
 	mu  map[uint64]*sync.Mutex
+}
+
+func (gr *KVGraderRepository) DeleteMetadata(ctx context.Context, graderId uint64, key []byte) error {
+	return gr.db.Delete(gr.getMetadataKey(graderId, key), pebble.Sync)
+}
+
+func (gr *KVGraderRepository) PutMetadata(ctx context.Context, graderId uint64, key []byte, value []byte) error {
+	return gr.db.Set(gr.getMetadataKey(graderId, key), value, pebble.Sync)
+}
+
+func (gr *KVGraderRepository) GetMetadata(ctx context.Context, graderId uint64, key []byte) ([]byte, error) {
+	value, closer, err := gr.db.Get(gr.getMetadataKey(graderId, key))
+	if err != nil {
+		return nil, err
+	}
+	defer closer.Close()
+	return value, nil
+}
+
+func (gr *KVGraderRepository) GetAllMetadata(ctx context.Context, graderId uint64) ([][]byte, [][]byte, error) {
+	prefix := gr.getMetadataPrefix(graderId)
+	prefixLen := len(prefix)
+	var keys [][]byte
+	var values [][]byte
+	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := iter.Key()[prefixLen:]
+		value := iter.Value()
+		keys = append(keys, key)
+		values = append(values, value)
+	}
+	return keys, values, nil
+}
+
+func (gr *KVGraderRepository) getMetadataKey(graderId uint64, key []byte) []byte {
+	return append(gr.getMetadataPrefix(graderId), key...)
+}
+
+func (gr *KVGraderRepository) getMetadataPrefix(graderId uint64) []byte {
+	return []byte(fmt.Sprintf("grader:metadata:id:%d:", graderId))
 }
 
 func (gr *KVGraderRepository) GetSubmissionsByGrader(ctx context.Context, graderId uint64) ([]uint64, error) {

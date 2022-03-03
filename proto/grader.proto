@@ -33,6 +33,7 @@ message GradeRequest {
 message GradeReport {
   SubmissionReport report = 1;
   SubmissionBriefReport brief = 2;
+  DockerGraderMetadata docker_metadata = 3;
 }
 
 message GradeResponse {
@@ -44,9 +45,45 @@ message GradeCallbackResponse {
 
 }
 
+message GetAllMetadataRequest {
+  uint64 grader_id = 1;
+}
+
+message GetAllMetadataResponse {
+  repeated bytes keys = 1;
+  repeated bytes values = 2;
+}
+
+message PutMetadataRequest {
+  uint64 grader_id = 1;
+  bytes key = 2;
+  bytes value = 3;
+}
+
+message PutMetadataResponse {
+
+}
+
+message GetMetadataRequest {
+  uint64 grader_id = 1;
+  bytes key = 2;
+}
+
+message GetMetadataResponse {
+  bytes value = 1;
+}
+
+message DockerGraderMetadata {
+  uint64 submission_id = 1;
+  string container_id = 2;
+}
+
 service GraderHubService {
   rpc RegisterGrader(RegisterGraderRequest) returns (RegisterGraderResponse);
   rpc Grade(GradeRequest) returns (GradeCallbackResponse);
   rpc GraderHeartbeat(stream GraderHeartbeatRequest) returns (stream GraderHeartbeatResponse);
   rpc GradeCallback(stream GradeResponse) returns (GradeCallbackResponse);
+  rpc GetMetadata(GetMetadataRequest) returns (GetMetadataResponse);
+  rpc PutMetadata(PutMetadataRequest) returns (PutMetadataResponse);
+  rpc GetAllMetadata(GetAllMetadataRequest) returns (GetAllMetadataResponse);
 }

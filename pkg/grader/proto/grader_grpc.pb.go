@@ -26,6 +26,9 @@ type GraderHubServiceClient interface {
 	Grade(ctx context.Context, in *GradeRequest, opts ...grpc.CallOption) (*GradeCallbackResponse, error)
 	GraderHeartbeat(ctx context.Context, opts ...grpc.CallOption) (GraderHubService_GraderHeartbeatClient, error)
 	GradeCallback(ctx context.Context, opts ...grpc.CallOption) (GraderHubService_GradeCallbackClient, error)
+	GetMetadata(ctx context.Context, in *GetMetadataRequest, opts ...grpc.CallOption) (*GetMetadataResponse, error)
+	PutMetadata(ctx context.Context, in *PutMetadataRequest, opts ...grpc.CallOption) (*PutMetadataResponse, error)
+	GetAllMetadata(ctx context.Context, in *GetAllMetadataRequest, opts ...grpc.CallOption) (*GetAllMetadataResponse, error)
 }
 
 type graderHubServiceClient struct {
@@ -119,6 +122,33 @@ func (x *graderHubServiceGradeCallbackClient) CloseAndRecv() (*GradeCallbackResp
 	return m, nil
 }
 
+func (c *graderHubServiceClient) GetMetadata(ctx context.Context, in *GetMetadataRequest, opts ...grpc.CallOption) (*GetMetadataResponse, error) {
+	out := new(GetMetadataResponse)
+	err := c.cc.Invoke(ctx, "/GraderHubService/GetMetadata", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *graderHubServiceClient) PutMetadata(ctx context.Context, in *PutMetadataRequest, opts ...grpc.CallOption) (*PutMetadataResponse, error) {
+	out := new(PutMetadataResponse)
+	err := c.cc.Invoke(ctx, "/GraderHubService/PutMetadata", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *graderHubServiceClient) GetAllMetadata(ctx context.Context, in *GetAllMetadataRequest, opts ...grpc.CallOption) (*GetAllMetadataResponse, error) {
+	out := new(GetAllMetadataResponse)
+	err := c.cc.Invoke(ctx, "/GraderHubService/GetAllMetadata", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GraderHubServiceServer is the server API for GraderHubService service.
 // All implementations must embed UnimplementedGraderHubServiceServer
 // for forward compatibility
@@ -127,6 +157,9 @@ type GraderHubServiceServer interface {
 	Grade(context.Context, *GradeRequest) (*GradeCallbackResponse, error)
 	GraderHeartbeat(GraderHubService_GraderHeartbeatServer) error
 	GradeCallback(GraderHubService_GradeCallbackServer) error
+	GetMetadata(context.Context, *GetMetadataRequest) (*GetMetadataResponse, error)
+	PutMetadata(context.Context, *PutMetadataRequest) (*PutMetadataResponse, error)
+	GetAllMetadata(context.Context, *GetAllMetadataRequest) (*GetAllMetadataResponse, error)
 	mustEmbedUnimplementedGraderHubServiceServer()
 }
 
@@ -145,6 +178,15 @@ func (UnimplementedGraderHubServiceServer) GraderHeartbeat(GraderHubService_Grad
 }
 func (UnimplementedGraderHubServiceServer) GradeCallback(GraderHubService_GradeCallbackServer) error {
 	return status.Errorf(codes.Unimplemented, "method GradeCallback not implemented")
+}
+func (UnimplementedGraderHubServiceServer) GetMetadata(context.Context, *GetMetadataRequest) (*GetMetadataResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetMetadata not implemented")
+}
+func (UnimplementedGraderHubServiceServer) PutMetadata(context.Context, *PutMetadataRequest) (*PutMetadataResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutMetadata not implemented")
+}
+func (UnimplementedGraderHubServiceServer) GetAllMetadata(context.Context, *GetAllMetadataRequest) (*GetAllMetadataResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAllMetadata not implemented")
 }
 func (UnimplementedGraderHubServiceServer) mustEmbedUnimplementedGraderHubServiceServer() {}
 
@@ -247,6 +289,60 @@ func (x *graderHubServiceGradeCallbackServer) Recv() (*GradeResponse, error) {
 	return m, nil
 }
 
+func _GraderHubService_GetMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMetadataRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GraderHubServiceServer).GetMetadata(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/GraderHubService/GetMetadata",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GraderHubServiceServer).GetMetadata(ctx, req.(*GetMetadataRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GraderHubService_PutMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutMetadataRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GraderHubServiceServer).PutMetadata(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/GraderHubService/PutMetadata",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GraderHubServiceServer).PutMetadata(ctx, req.(*PutMetadataRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GraderHubService_GetAllMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAllMetadataRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GraderHubServiceServer).GetAllMetadata(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/GraderHubService/GetAllMetadata",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GraderHubServiceServer).GetAllMetadata(ctx, req.(*GetAllMetadataRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GraderHubService_ServiceDesc is the grpc.ServiceDesc for GraderHubService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -261,6 +357,18 @@ var GraderHubService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Grade",
 			Handler:    _GraderHubService_Grade_Handler,
+		},
+		{
+			MethodName: "GetMetadata",
+			Handler:    _GraderHubService_GetMetadata_Handler,
+		},
+		{
+			MethodName: "PutMetadata",
+			Handler:    _GraderHubService_PutMetadata_Handler,
+		},
+		{
+			MethodName: "GetAllMetadata",
+			Handler:    _GraderHubService_GetAllMetadata_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
