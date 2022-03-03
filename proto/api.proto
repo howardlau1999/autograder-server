@@ -592,6 +592,26 @@ message CancelSubmissionResponse {
 
 }
 
+message SearchUserRequest {
+  string username = 1;
+  string nickname = 2;
+  string email = 3;
+  uint64 user_id = 4;
+  string student_id = 5;
+}
+
+message SearchUserResponse {
+  repeated User users = 1;
+}
+
+message SetAdminRequest {
+  uint64 user_id = 1;
+}
+
+message SetAdminResponse {
+
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -641,4 +661,6 @@ service AutograderService {
    rpc RemoveGrader(RemoveGraderRequest) returns (RemoveGraderResponse);
    rpc GetAllGraders(GetAllGradersRequest) returns (GetAllGradersResponse);
    rpc CancelSubmission(CancelSubmissionRequest) returns (CancelSubmissionResponse);
+   rpc SearchUser(SearchUserRequest) returns (SearchUserResponse);
+   rpc SetAdmin(SetAdminRequest) returns (SetAdminResponse);
 }

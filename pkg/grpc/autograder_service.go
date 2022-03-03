@@ -672,52 +672,94 @@ func (a *AutograderService) GetLeaderboard(
 	return resp, err
 }
 
-func walkDir(dirpath string, relpath string, node *autograder_pb.FileTreeNode) error {
-	f, err := os.Open(dirpath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	dirs, err := f.ReadDir(-1)
-	if err != nil {
-		return err
-	}
-	for _, dir := range dirs {
-		nodeType := autograder_pb.FileTreeNode_File
-		if dir.IsDir() {
-			nodeType = autograder_pb.FileTreeNode_Folder
-		}
-		p := path.Join(relpath, dir.Name())
-		node.Children = append(
-			node.Children, &autograder_pb.FileTreeNode{Name: dir.Name(), NodeType: nodeType, Path: p},
-		)
-		child := node.Children[len(node.Children)-1]
-		if dir.IsDir() {
-			err = walkDir(filepath.Join(dirpath, dir.Name()), p, child)
-			if err != nil {
-				return err
+type fileTreeNode struct {
+	name        string
+	path        string
+	isFile      bool
+	childrenIdx map[string]int
+	children    []*fileTreeNode
+}
+
+func addFileToNode(subpath string, node *fileTreeNode) {
+	segments := strings.Split(subpath, "/")
+	curPath := ""
+	curr := node
+	for i := 0; i < len(segments); i++ {
+		isFile := i == len(segments)-1
+		var next *fileTreeNode
+		nextIdx, ok := curr.childrenIdx[segments[i]]
+		curPath = path.Join(curPath, segments[i])
+		if !ok {
+			next = new(fileTreeNode)
+			if curr.childrenIdx == nil {
+				curr.childrenIdx = map[string]int{}
 			}
+			curr.children = append(curr.children, next)
+			curr.childrenIdx[segments[i]] = len(curr.children) - 1
+		} else {
+			next = curr.children[nextIdx]
+		}
+		next.isFile = isFile
+		next.name = segments[i]
+		next.path = curPath
+		curr = next
+	}
+}
+
+type fileTreeNodeSlice []*fileTreeNode
+
+func (fs fileTreeNodeSlice) Len() int {
+	return len(fs)
+}
+
+func (fs fileTreeNodeSlice) Swap(i, j int) {
+	temp := fs[i]
+	fs[i] = fs[j]
+	fs[j] = temp
+}
+
+func (fs fileTreeNodeSlice) Less(i int, j int) bool {
+	if fs[i].isFile && !fs[j].isFile {
+		return false
+	}
+	if !fs[i].isFile && fs[j].isFile {
+		return true
+	}
+	return fs[i].name < fs[j].name
+}
+
+func convertTreeNode(node *fileTreeNode, pbNode *autograder_pb.FileTreeNode) {
+	sort.Sort(fileTreeNodeSlice(node.children))
+	for _, child := range node.children {
+		if child.isFile {
+			pbNode.Children = append(
+				pbNode.Children,
+				&autograder_pb.FileTreeNode{
+					NodeType: autograder_pb.FileTreeNode_File, Name: child.name, Path: child.path,
+				},
+			)
+		} else {
+			dirPBNode := &autograder_pb.FileTreeNode{
+				NodeType: autograder_pb.FileTreeNode_Folder, Name: child.name, Path: child.path,
+			}
+			convertTreeNode(child, dirPBNode)
+			pbNode.Children = append(pbNode.Children, dirPBNode)
 		}
 	}
-	return nil
 }
 
 func (a *AutograderService) GetFilesInSubmission(
 	ctx context.Context, request *autograder_pb.GetFilesInSubmissionRequest,
 ) (*autograder_pb.GetFilesInSubmissionResponse, error) {
 	submission := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
-	subDir := submission.GetPath()
-	l := ctxzap.Extract(ctx).With(
-		zap.Uint64("submissionId", request.GetSubmissionId()),
-		zap.String("submissionDir", subDir),
-	)
-	root := &autograder_pb.FileTreeNode{}
-	err := walkDir(subDir, "", root)
-	if err != nil {
-		l.Error("GetFilesInSubmission.WalkDir", zap.Error(err))
-		return nil, status.Error(codes.Internal, "WALK_DIR")
+
+	root := &fileTreeNode{}
+	for _, f := range submission.Files {
+		addFileToNode(f, root)
 	}
-	rootPB := &autograder_pb.GetFilesInSubmissionResponse{Roots: root.GetChildren()}
+	pbRoot := &autograder_pb.FileTreeNode{}
+	convertTreeNode(root, pbRoot)
+	rootPB := &autograder_pb.GetFilesInSubmissionResponse{Roots: pbRoot.GetChildren()}
 	return rootPB, nil
 }
 
@@ -863,7 +905,7 @@ func (a *AutograderService) InitUpload(
 
 		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
 	}
-	_, err := a.manifestRepo.AddFileToManifest(nil, filename, request.GetManifestId())
+	_, err := a.manifestRepo.AddFileToManifest(ctx, filename, request.GetManifestId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "ADD_FILES")
 	}
@@ -1769,6 +1811,23 @@ func (a *AutograderService) manifestGarbageCollect() {
 			zap.L().Error("Manifest.GC.DeleteFile", zap.String("manifestPath", manifestPath), zap.Error(err))
 		}
 	}
+}
+
+func (a *AutograderService) PushFile(w http.ResponseWriter, r *http.Request) {
+	uploadPath := r.URL.Path
+
+	err := a.ls.Put(
+		r.Context(),
+		uploadPath,
+		r.Body,
+	)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	return
 }
 
 func NewAutograderServiceServer(

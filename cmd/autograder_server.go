@@ -192,7 +192,11 @@ func main() {
 		return
 	}
 	serverReadConfig()
-	ls := &storage.LocalStorage{}
+	cwd, err := os.Getwd()
+	if err != nil {
+		zap.L().Fatal("OS.Getwd", zap.Error(err))
+	}
+	ls := storage.NewLocalStorage(cwd)
 	m := mailer.NewSMTPMailer(viper.GetString("smtp.addr"), viper.GetString("smtp.user"), viper.GetString("smtp.pass"))
 	distFS, err := fs.Sub(web.WebResources, "dist")
 	if err != nil {
@@ -307,14 +311,17 @@ func main() {
 	var writeTemplate func(w http.ResponseWriter, r *http.Request)
 	if err == nil {
 		rendered := &bytes.Buffer{}
-		tmpl.Execute(rendered, providedTokens)
+		err = tmpl.Execute(rendered, providedTokens)
+		if err != nil {
+			panic(err)
+		}
 		writeTemplate = func(w http.ResponseWriter, r *http.Request) {
 			io.Copy(w, rendered)
 		}
 	}
 	fsrv := http.FileServer(http.FS(distFS))
 
-	router.Handle(
+	router.Get(
 		"/*", http.HandlerFunc(
 			func(w http.ResponseWriter, r *http.Request) {
 				p := r.URL.Path
@@ -336,16 +343,28 @@ func main() {
 	)
 	graderHubLis, err := net.Listen("tcp", ":9999")
 	if err != nil {
-		panic(err)
+		zap.L().Fatal("Server.Grader.Listen", zap.Error(err))
 	}
 	go func() {
 		err := graderHubServer.Serve(graderHubLis)
 		if err != nil {
-			panic(err)
+			zap.L().Fatal("Server.Grader.Serve", zap.Error(err))
 		}
 	}()
+
+	// Simple File Server for graders
+	fileSrvRouter := chi.NewRouter()
+	fileSrvRouter.Post("/*", autograderService.PushFile)
+	fileSrvRouter.Get("/*", http.FileServer(http.Dir(".")).ServeHTTP)
+	go func() {
+		zap.L().Info("HTTPFS.Listen", zap.Int("port", 19999))
+		if err := http.ListenAndServe(":19999", fileSrvRouter); err != nil {
+			zap.L().Fatal("Server.File.Serve", zap.Error(err))
+		}
+	}()
+
 	grpclog.Infof("Server listening on port %d. Open http://localhost:%d", port, port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), router); err != nil {
-		grpclog.Fatalf("Failed starting http2 server: %v", err)
+		zap.L().Fatal("Server.HTTP.Listen", zap.Error(err))
 	}
 }

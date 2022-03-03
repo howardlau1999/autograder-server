@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"autograder-server/pkg/grader"
 	grader_pb "autograder-server/pkg/grader/proto"
 	model_pb "autograder-server/pkg/model/proto"
+	"autograder-server/pkg/storage"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -37,6 +39,9 @@ type GraderWorker struct {
 	client       grader_pb.GraderHubServiceClient
 	dockerGrader *grader.DockerProgrammingGrader
 	graderId     uint64
+	basePath     string
+	ls           *storage.LocalStorage
+	sfs          *storage.SimpleHTTPFS
 }
 
 type ReportBuffer struct {
@@ -80,11 +85,39 @@ func NewReportBuffer() *ReportBuffer {
 	return b
 }
 
+func (b *ReportBuffer) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	b.cond.Broadcast()
+}
+
 func (b *ReportBuffer) Send(report *grader_pb.GradeReport) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.closed {
+		return
+	}
 	b.buffer = append(b.buffer, report)
 	b.cond.Broadcast()
+}
+
+func (g *GraderWorker) uploadFile(ctx context.Context, filePath string) error {
+	local, err := g.ls.Open(ctx, filePath)
+	if err != nil {
+		return err
+	}
+	defer local.Close()
+	return g.sfs.Put(ctx, filePath, local)
+}
+
+func (g *GraderWorker) downloadFile(ctx context.Context, filePath string) error {
+	data, err := g.sfs.Get(ctx, filePath)
+	if err != nil {
+		return err
+	}
+	defer data.Close()
+	return g.ls.Put(ctx, filePath, data)
 }
 
 func (g *GraderWorker) getMetadataKey(submissionId uint64) []byte {
@@ -128,7 +161,32 @@ func (g *GraderWorker) sendReports(
 			logger.Error("Grader.GradeCallback.Send", zap.Error(err))
 			goto Out
 		}
-		if submissionStatus == model_pb.SubmissionStatus_Finished || submissionStatus == model_pb.SubmissionStatus_Cancelled || submissionStatus == model_pb.SubmissionStatus_Failed {
+		if submissionStatus == model_pb.SubmissionStatus_Finished {
+			testcases := report.GetReport().GetTests()
+			for _, testcase := range testcases {
+				if testcase.GetOutputPath() == "" {
+					continue
+				}
+				go func(outputPath string) {
+					logger.Debug("OutputFile.Upload", zap.String("outputPath", outputPath))
+					err := g.uploadFile(
+						context.Background(),
+						outputPath,
+					)
+					if err != nil {
+						logger.Error("OutputFile.Upload", zap.String("outputPath", outputPath), zap.Error(err))
+					}
+					logger.Debug("Grader.FS.Remove", zap.String("file", outputPath))
+					err = g.ls.Delete(context.Background(), outputPath)
+					if err != nil {
+						logger.Error("Grader.FS.Remove", zap.String("file", outputPath), zap.Error(err))
+					}
+				}(path.Join(fmt.Sprintf("runs/submissions/%d/results/outputs", submissionId), testcase.GetOutputPath()))
+			}
+		}
+		if submissionStatus == model_pb.SubmissionStatus_Finished ||
+			submissionStatus == model_pb.SubmissionStatus_Cancelled ||
+			submissionStatus == model_pb.SubmissionStatus_Failed {
 			_, err := g.client.PutMetadata(
 				context.Background(),
 				&grader_pb.PutMetadataRequest{GraderId: g.graderId, Key: g.getMetadataKey(submissionId)},
@@ -190,6 +248,19 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 	}
 }
 
+const ErrCheckFileExists = -101
+const ErrDownloadFile = -102
+
+func (g *GraderWorker) onSubmissionFinished(submissionId uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	cancel := g.cancelChs[submissionId]
+	if cancel != nil {
+		cancel()
+	}
+	delete(g.cancelChs, submissionId)
+}
+
 func (g *GraderWorker) gradeOneSubmission(
 	req *grader_pb.GradeRequest,
 ) {
@@ -201,8 +272,64 @@ func (g *GraderWorker) gradeOneSubmission(
 	g.mu.Unlock()
 	logger := zap.L().With(zap.Uint64("submissionId", req.GetSubmissionId()))
 	go g.submissionReporter(req.SubmissionId, buffer)
+
+	// Download files
+	filesWg := &sync.WaitGroup{}
+	for _, file := range req.Submission.Files {
+		notExists, err := g.ls.NotExists(ctx, path.Join(req.Submission.Path, file))
+		if err != nil {
+			buffer.Send(
+				&grader_pb.GradeReport{
+					Brief: &model_pb.SubmissionBriefReport{
+						Status:        model_pb.SubmissionStatus_Failed,
+						InternalError: ErrCheckFileExists,
+					},
+				},
+			)
+			g.onSubmissionFinished(req.SubmissionId)
+			buffer.Close()
+			break
+		}
+		if !notExists {
+			continue
+		}
+		filesWg.Add(1)
+		go func(file string) {
+			err := g.downloadFile(ctx, file)
+			logger.Debug("Grader.HTTPFS.Download", zap.String("file", file))
+			if err != nil {
+				buffer.Send(
+					&grader_pb.GradeReport{
+						Brief: &model_pb.SubmissionBriefReport{
+							Status:        model_pb.SubmissionStatus_Failed,
+							InternalError: ErrDownloadFile,
+						},
+					},
+				)
+				g.onSubmissionFinished(req.SubmissionId)
+				buffer.Close()
+			}
+			filesWg.Done()
+		}(path.Join(req.Submission.Path, file))
+	}
+	filesWg.Wait()
+
+	defer func(file string) {
+		logger.Debug("Grader.FS.Remove", zap.String("file", file))
+		err := g.ls.Delete(context.Background(), file)
+		if err != nil {
+			logger.Error("Grader.FS.Remove", zap.String("file", file), zap.Error(err))
+		}
+	}(path.Join(req.Submission.Path))
+
+	if ctx.Err() != nil {
+		g.onSubmissionFinished(req.SubmissionId)
+		return
+	}
+
 	go g.dockerGrader.GradeSubmission(
 		grader.SetGraderLogger(ctx, logger),
+		g.basePath,
 		req.GetSubmissionId(),
 		req.GetSubmission(),
 		req.GetConfig(),
@@ -214,14 +341,8 @@ func (g *GraderWorker) gradeOneSubmission(
 		)
 		buffer.Send(r)
 	}
-	cancel()
-	buffer.mu.Lock()
-	buffer.closed = true
-	buffer.mu.Unlock()
-	buffer.cond.Signal()
-	g.mu.Lock()
-	delete(g.cancelChs, req.SubmissionId)
-	g.mu.Unlock()
+	g.onSubmissionFinished(req.SubmissionId)
+	buffer.Close()
 }
 
 func (g *GraderWorker) WorkLoop() {
@@ -363,10 +484,18 @@ func main() {
 	l, _ := zap.NewDevelopment()
 	zap.ReplaceGlobals(l)
 	graderReadConfig()
+	cwd, err := os.Getwd()
+	if err != nil {
+		zap.L().Fatal("OS.Getwd", zap.Error(err))
+	}
+	basePath := path.Join(cwd, "grader")
 	worker := &GraderWorker{
 		runningSubs: map[uint64]*grader_pb.GradeRequest{},
 		cancelChs:   map[uint64]context.CancelFunc{},
 		mu:          &sync.Mutex{},
+		basePath:    basePath,
+		ls:          storage.NewLocalStorage(basePath),
+		sfs:         storage.NewSimpleHTTPFS("http://localhost:19999"),
 	}
 	worker.WorkLoop()
 }

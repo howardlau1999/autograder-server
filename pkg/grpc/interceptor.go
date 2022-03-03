@@ -48,6 +48,10 @@ type IGetCaptcha interface {
 	GetCaptcha() string
 }
 
+type IGetManifestId interface {
+	GetManifestId() uint64
+}
+
 type ServiceAuthFunc interface {
 	AuthFunc(ctx context.Context, req interface{}, fullMethod string) (context.Context, error)
 }
@@ -173,6 +177,22 @@ func (a *AutograderService) RequireAdmin(ctx context.Context, req interface{}) (
 	return ctx, nil
 }
 
+func (a *AutograderService) CheckManifest(ctx context.Context, req interface{}) (context.Context, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	manifestReq, ok := req.(IGetManifestId)
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "MANIFEST_ID")
+	}
+	manifest, err := a.manifestRepo.GetManifest(ctx, manifestReq.GetManifestId())
+	if err != nil {
+		return nil, status.Error(codes.DeadlineExceeded, "MANIFEST_EXPIRED")
+	}
+	if manifest.GetUserId() != user.GetUserId() {
+		return nil, status.Error(codes.PermissionDenied, "WRONG_USER")
+	}
+	return ctx, nil
+}
+
 func (a *AutograderService) RequireCourseWrite(ctx context.Context, req interface{}) (context.Context, error) {
 	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
 	if member.GetRole() == model_pb.CourseRole_Reader || member.GetRole() == model_pb.CourseRole_Student {
@@ -240,9 +260,6 @@ func (a *AutograderService) initAuthFuncs() {
 		{
 			Methods: []string{
 				"GetCourseList",
-				"InitUpload",
-				"CreateCourse",
-				"DeleteFileInManifest",
 				"GetUser",
 				"UpdateBasicInfo",
 				"BindGithub",
@@ -255,7 +272,17 @@ func (a *AutograderService) initAuthFuncs() {
 		},
 		{
 			Methods: []string{
+				"InitUpload",
+				"DeleteFileInManifest",
+			},
+			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.CheckManifest},
+		},
+		{
+			Methods: []string{
 				"GetAllGraders",
+				"SearchUser",
+				"SetAdmin",
+				"CreateCourse",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.RequireAdmin},
 		},

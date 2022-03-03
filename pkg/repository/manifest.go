@@ -20,6 +20,7 @@ type ManifestRepository interface {
 	GetFilesInManifest(ctx context.Context, id uint64) ([]string, error)
 	DeleteManifest(ctx context.Context, id uint64) error
 	GarbageCollect(ctx context.Context, expired chan uint64)
+	GetManifest(ctx context.Context, manifestId uint64) (*model_pb.ManifestMetadata, error)
 }
 
 type KVManifestRepository struct {
@@ -27,7 +28,23 @@ type KVManifestRepository struct {
 	seq Sequencer
 }
 
-const ManifestExpireTimeout = 10 * time.Second
+const ManifestExpireTimeout = 10 * time.Minute
+
+func (mr *KVManifestRepository) GetManifest(ctx context.Context, manifestId uint64) (
+	*model_pb.ManifestMetadata, error,
+) {
+	raw, closer, err := mr.db.Get(mr.getMetadataKey(manifestId))
+	if err != nil {
+		return nil, err
+	}
+	manifest := &model_pb.ManifestMetadata{}
+	err = proto.Unmarshal(raw, manifest)
+	closer.Close()
+	if err != nil {
+		return nil, err
+	}
+	return manifest, nil
+}
 
 func (mr *KVManifestRepository) GarbageCollect(ctx context.Context, expired chan uint64) {
 	ticker := time.NewTicker(10 * time.Second)
