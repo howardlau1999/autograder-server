@@ -74,6 +74,7 @@ type AutograderServiceClient interface {
 	SetAdmin(ctx context.Context, in *SetAdminRequest, opts ...grpc.CallOption) (*SetAdminResponse, error)
 	GetAllUsers(ctx context.Context, in *GetAllUsersRequest, opts ...grpc.CallOption) (*GetAllUsersResponse, error)
 	GetGradeQueue(ctx context.Context, in *GetGradeQueueRequest, opts ...grpc.CallOption) (*GetGradeQueueResponse, error)
+	DeleteLeaderboard(ctx context.Context, in *DeleteLeaderboardRequest, opts ...grpc.CallOption) (*DeleteLeaderboardResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -575,6 +576,15 @@ func (c *autograderServiceClient) GetGradeQueue(ctx context.Context, in *GetGrad
 	return out, nil
 }
 
+func (c *autograderServiceClient) DeleteLeaderboard(ctx context.Context, in *DeleteLeaderboardRequest, opts ...grpc.CallOption) (*DeleteLeaderboardResponse, error) {
+	out := new(DeleteLeaderboardResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/DeleteLeaderboard", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -631,6 +641,7 @@ type AutograderServiceServer interface {
 	SetAdmin(context.Context, *SetAdminRequest) (*SetAdminResponse, error)
 	GetAllUsers(context.Context, *GetAllUsersRequest) (*GetAllUsersResponse, error)
 	GetGradeQueue(context.Context, *GetGradeQueueRequest) (*GetGradeQueueResponse, error)
+	DeleteLeaderboard(context.Context, *DeleteLeaderboardRequest) (*DeleteLeaderboardResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -793,6 +804,9 @@ func (UnimplementedAutograderServiceServer) GetAllUsers(context.Context, *GetAll
 }
 func (UnimplementedAutograderServiceServer) GetGradeQueue(context.Context, *GetGradeQueueRequest) (*GetGradeQueueResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetGradeQueue not implemented")
+}
+func (UnimplementedAutograderServiceServer) DeleteLeaderboard(context.Context, *DeleteLeaderboardRequest) (*DeleteLeaderboardResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteLeaderboard not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1746,6 +1760,24 @@ func _AutograderService_GetGradeQueue_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_DeleteLeaderboard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteLeaderboardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).DeleteLeaderboard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/DeleteLeaderboard",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).DeleteLeaderboard(ctx, req.(*DeleteLeaderboardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1956,6 +1988,10 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetGradeQueue",
 			Handler:    _AutograderService_GetGradeQueue_Handler,
+		},
+		{
+			MethodName: "DeleteLeaderboard",
+			Handler:    _AutograderService_DeleteLeaderboard_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

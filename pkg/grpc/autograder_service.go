@@ -321,12 +321,12 @@ func (a *AutograderService) UpdateAssignment(
 	l.Debug("UpdateAssignment")
 	_, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
 	if err != nil {
-		return nil, status.Error(codes.NotFound, "INVALID_COURSE_ID")
+		return nil, status.Error(codes.NotFound, "INVALID_ASSIGNMENT_ID")
 	}
 	err = a.assignmentRepo.UpdateAssignment(ctx, assignmentId, assignment)
 	if err != nil {
-		l.Error("UpdateAssignment.UpdateCourse", zap.Error(err))
-		return nil, status.Error(codes.Internal, "UPDATE_COURSE")
+		l.Error("UpdateAssignment.UpdateAssignment", zap.Error(err))
+		return nil, status.Error(codes.Internal, "UPDATE_ASSIGNMENT")
 	}
 	go a.pullImage(assignment.GetProgrammingConfig().GetImage())
 	return &autograder_pb.UpdateAssignmentResponse{}, nil
@@ -549,6 +549,7 @@ func (a *AutograderService) CreateAssignment(
 	assignment.Description = request.GetDescription()
 	assignment.CourseId = request.GetCourseId()
 	assignment.ProgrammingConfig = request.GetProgrammingConfig()
+	assignment.SubmissionLimit = request.GetSubmissionLimit()
 	if len(assignment.Name) == 0 || len(assignment.Name) > 256 {
 		return nil, status.Error(codes.InvalidArgument, "NAME")
 	}
@@ -832,12 +833,44 @@ func (a *AutograderService) CreateSubmission(
 	ctx context.Context, request *autograder_pb.CreateSubmissionRequest,
 ) (*autograder_pb.CreateSubmissionResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	role := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember).Role
+	assignment := ctx.Value(assignmentCtxKey{}).(*model_pb.Assignment)
+	submissionLimit := assignment.GetSubmissionLimit()
+	if submissionLimit != nil && role != model_pb.CourseRole_Instructor && role != model_pb.CourseRole_TA {
+		submissionIds, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(
+			ctx, user.GetUserId(), request.GetAssignmentId(),
+		)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "GET_SUBMISSIONS")
+		}
+		if submissionLimit.GetTotal() > 0 {
+			if len(submissionIds) > int(submissionLimit.GetTotal()) {
+				return nil, status.Error(codes.ResourceExhausted, "SUBMISSION_LIMIT")
+			}
+		}
+		if submissionLimit.GetFrequency() > 0 && submissionLimit.GetPeriod() > 0 {
+			windowCount := 0
+			windowLimit := time.Now().Add(-time.Minute * time.Duration(submissionLimit.GetPeriod()))
+			for _, subId := range submissionIds {
+				sub, err := a.submissionRepo.GetSubmission(ctx, subId)
+				if err != nil {
+					return nil, status.Error(codes.Internal, "GET_SUBMISSION")
+				}
+				if sub.GetSubmittedAt().AsTime().After(windowLimit) {
+					windowCount += 1
+				}
+			}
+			if windowCount >= int(submissionLimit.GetFrequency()) {
+				return nil, status.Error(codes.ResourceExhausted, "SUBMISSION_FREQUENCY")
+			}
+		}
+	}
 	manifestId := request.GetManifestId()
 	assignmentId := request.GetAssignmentId()
 	submitters := request.GetSubmitters()
 	submissionPath := a.getManifestPath(manifestId)
 	files, err := a.manifestRepo.GetFilesInManifest(nil, manifestId)
-	if err != nil {
+	if err != nil || len(files) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "MANIFEST_FILES")
 	}
 	err = a.manifestRepo.DeleteManifest(nil, manifestId)
@@ -1854,5 +1887,6 @@ func NewAutograderServiceServer(
 	a.initAuthFuncs()
 	go a.runUnfinishedSubmissions()
 	go a.manifestGarbageCollect()
+	go a.verificationCodeRepo.GarbageCollect()
 	return a
 }

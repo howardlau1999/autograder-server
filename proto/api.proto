@@ -270,6 +270,7 @@ message CreateAssignmentRequest {
   google.protobuf.Timestamp late_due_date = 6;
   string description = 7;
   ProgrammingAssignmentConfig programming_config = 8;
+  SubmissionLimitConfig submission_limit = 9;
 }
 
 message CreateAssignmentResponse {
@@ -631,6 +632,15 @@ message GetGradeQueueResponse {
 
 }
 
+message DeleteLeaderboardRequest {
+  uint64 assignment_id = 1;
+  uint64 user_id = 2;
+}
+
+message DeleteLeaderboardResponse {
+
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -684,4 +694,5 @@ service AutograderService {
    rpc SetAdmin(SetAdminRequest) returns (SetAdminResponse);
    rpc GetAllUsers(GetAllUsersRequest) returns (GetAllUsersResponse);
    rpc GetGradeQueue(GetGradeQueueRequest) returns (GetGradeQueueResponse);
+   rpc DeleteLeaderboard(DeleteLeaderboardRequest) returns (DeleteLeaderboardResponse);
 }

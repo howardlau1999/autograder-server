@@ -101,6 +101,11 @@ func (d *DockerProgrammingGrader) PullImage(image string) error {
 	return err
 }
 
+func (d *DockerProgrammingGrader) BuildImage(ctx context.Context, buildContext io.Reader, image string) error {
+	d.cli.ImageBuild(ctx, buildContext, types.ImageBuildOptions{Context: buildContext, Tags: []string{image}})
+	return nil
+}
+
 const (
 	ErrListImage             = -1
 	ErrPullImage             = 1
