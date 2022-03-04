@@ -456,10 +456,12 @@ func (a *AutograderService) GetCourseMembers(
 func (a *AutograderService) InitDownload(
 	ctx context.Context, request *autograder_pb.InitDownloadRequest,
 ) (*autograder_pb.InitDownloadResponse, error) {
-	sub := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
+	submission := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	if request.GetIsDirectory() {
 		fn := fmt.Sprintf("submission_%d.zip", request.GetSubmissionId())
-		payloadPB := &autograder_pb.DownloadTokenPayload{RealPath: sub.GetPath(), Filename: fn, IsDirectory: true}
+		payloadPB := &autograder_pb.DownloadTokenPayload{
+			RealPath: submission.GetPath(), Filename: fn, IsDirectory: true, SubmissionId: request.GetSubmissionId(),
+		}
 		ss, err := a.signPayloadToken(DownloadJWTSignKey, payloadPB, time.Now().Add(1*time.Minute))
 		if err != nil {
 			return nil, status.Error(codes.Internal, "SIGN_JWT")
@@ -471,7 +473,7 @@ func (a *AutograderService) InitDownload(
 	if isFilenameInvalid(filename) {
 		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
 	}
-	realpath := path.Join(sub.GetPath(), filename)
+	realpath := path.Join(submission.GetPath(), filename)
 	if request.GetIsOutput() {
 		realpath = path.Join(fmt.Sprintf("runs/submissions/%d/results/outputs", request.GetSubmissionId()), filename)
 	}
@@ -960,9 +962,11 @@ func (a *AutograderService) SubscribeSubmission(
 	idx = len(a.reportSubs[id]) - 1
 	a.subsMu.Unlock()
 	brief, _ = a.submissionReportRepo.GetSubmissionBriefReport(server.Context(), id)
+	rank, total := a.graderHubSvc.GetPendingRank(id)
 	err = server.Send(
 		&autograder_pb.SubscribeSubmissionResponse{
 			Score: brief.GetScore(), MaxScore: brief.GetMaxScore(), Status: brief.GetStatus(),
+			PendingRank: &model_pb.PendingRank{Rank: uint64(rank), Total: uint64(total)},
 		},
 	)
 	if err != nil {
@@ -980,9 +984,10 @@ func (a *AutograderService) SubscribeSubmission(
 		case r := <-c:
 			err := server.Send(
 				&autograder_pb.SubscribeSubmissionResponse{
-					Score:    r.GetBrief().GetScore(),
-					MaxScore: r.GetBrief().GetMaxScore(),
-					Status:   r.GetBrief().GetStatus(),
+					Score:       r.GetBrief().GetScore(),
+					MaxScore:    r.GetBrief().GetMaxScore(),
+					Status:      r.GetBrief().GetStatus(),
+					PendingRank: r.GetPendingRank(),
 				},
 			)
 			if r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Failed ||
@@ -1298,38 +1303,30 @@ func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Re
 		w.Header().Add("Content-disposition", "attachment; filename="+fn)
 		http.ServeFile(w, r, payloadPB.GetRealPath())
 	} else {
+		submission, err := a.submissionRepo.GetSubmission(r.Context(), payloadPB.GetSubmissionId())
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		w.Header().Add("Content-disposition", "attachment; filename="+fn)
 		zw := zip.NewWriter(w)
 		defer zw.Close()
-		prefix := payloadPB.GetRealPath()
-		walker := func(path string, info os.FileInfo, err error) error {
+		for _, f := range submission.Files {
+			data, err := a.ls.Open(r.Context(), filepath.Join(submission.Path, f))
 			if err != nil {
-				return err
+				logger.Error("FileDownload.GenerateZip.OpenLocal", zap.Error(err))
+				return
 			}
-			if info.IsDir() {
-				return nil
-			}
-			file, err := os.Open(path)
+			zf, err := zw.Create(f)
 			if err != nil {
-				return err
+				logger.Error("FileDownload.GenerateZip.CreateZipFile", zap.Error(err))
+				return
 			}
-			defer file.Close()
-
-			f, err := zw.Create(path[len(prefix):])
+			_, err = io.Copy(zf, data)
 			if err != nil {
-				return err
+				logger.Error("FileDownload.GenerateZip.IOCopy", zap.Error(err))
+				return
 			}
-
-			_, err = io.Copy(f, file)
-			if err != nil {
-				return err
-			}
-
-			return nil
-		}
-		err = filepath.Walk(payloadPB.GetRealPath(), walker)
-		if err != nil {
-			logger.Error("FileDownload.GenerateZip", zap.Error(err))
 		}
 	}
 }

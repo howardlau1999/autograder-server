@@ -70,6 +70,10 @@ type AutograderServiceClient interface {
 	RemoveGrader(ctx context.Context, in *RemoveGraderRequest, opts ...grpc.CallOption) (*RemoveGraderResponse, error)
 	GetAllGraders(ctx context.Context, in *GetAllGradersRequest, opts ...grpc.CallOption) (*GetAllGradersResponse, error)
 	CancelSubmission(ctx context.Context, in *CancelSubmissionRequest, opts ...grpc.CallOption) (*CancelSubmissionResponse, error)
+	SearchUser(ctx context.Context, in *SearchUserRequest, opts ...grpc.CallOption) (*SearchUserResponse, error)
+	SetAdmin(ctx context.Context, in *SetAdminRequest, opts ...grpc.CallOption) (*SetAdminResponse, error)
+	GetAllUsers(ctx context.Context, in *GetAllUsersRequest, opts ...grpc.CallOption) (*GetAllUsersResponse, error)
+	GetGradeQueue(ctx context.Context, in *GetGradeQueueRequest, opts ...grpc.CallOption) (*GetGradeQueueResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -535,6 +539,42 @@ func (c *autograderServiceClient) CancelSubmission(ctx context.Context, in *Canc
 	return out, nil
 }
 
+func (c *autograderServiceClient) SearchUser(ctx context.Context, in *SearchUserRequest, opts ...grpc.CallOption) (*SearchUserResponse, error) {
+	out := new(SearchUserResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/SearchUser", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) SetAdmin(ctx context.Context, in *SetAdminRequest, opts ...grpc.CallOption) (*SetAdminResponse, error) {
+	out := new(SetAdminResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/SetAdmin", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) GetAllUsers(ctx context.Context, in *GetAllUsersRequest, opts ...grpc.CallOption) (*GetAllUsersResponse, error) {
+	out := new(GetAllUsersResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GetAllUsers", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *autograderServiceClient) GetGradeQueue(ctx context.Context, in *GetGradeQueueRequest, opts ...grpc.CallOption) (*GetGradeQueueResponse, error) {
+	out := new(GetGradeQueueResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GetGradeQueue", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -587,6 +627,10 @@ type AutograderServiceServer interface {
 	RemoveGrader(context.Context, *RemoveGraderRequest) (*RemoveGraderResponse, error)
 	GetAllGraders(context.Context, *GetAllGradersRequest) (*GetAllGradersResponse, error)
 	CancelSubmission(context.Context, *CancelSubmissionRequest) (*CancelSubmissionResponse, error)
+	SearchUser(context.Context, *SearchUserRequest) (*SearchUserResponse, error)
+	SetAdmin(context.Context, *SetAdminRequest) (*SetAdminResponse, error)
+	GetAllUsers(context.Context, *GetAllUsersRequest) (*GetAllUsersResponse, error)
+	GetGradeQueue(context.Context, *GetGradeQueueRequest) (*GetGradeQueueResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -737,6 +781,18 @@ func (UnimplementedAutograderServiceServer) GetAllGraders(context.Context, *GetA
 }
 func (UnimplementedAutograderServiceServer) CancelSubmission(context.Context, *CancelSubmissionRequest) (*CancelSubmissionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CancelSubmission not implemented")
+}
+func (UnimplementedAutograderServiceServer) SearchUser(context.Context, *SearchUserRequest) (*SearchUserResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SearchUser not implemented")
+}
+func (UnimplementedAutograderServiceServer) SetAdmin(context.Context, *SetAdminRequest) (*SetAdminResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetAdmin not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetAllUsers(context.Context, *GetAllUsersRequest) (*GetAllUsersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAllUsers not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetGradeQueue(context.Context, *GetGradeQueueRequest) (*GetGradeQueueResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetGradeQueue not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1618,6 +1674,78 @@ func _AutograderService_CancelSubmission_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_SearchUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).SearchUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/SearchUser",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).SearchUser(ctx, req.(*SearchUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_SetAdmin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetAdminRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).SetAdmin(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/SetAdmin",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).SetAdmin(ctx, req.(*SetAdminRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_GetAllUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAllUsersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GetAllUsers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GetAllUsers",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GetAllUsers(ctx, req.(*GetAllUsersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutograderService_GetGradeQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetGradeQueueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GetGradeQueue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GetGradeQueue",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GetGradeQueue(ctx, req.(*GetGradeQueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1812,6 +1940,22 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CancelSubmission",
 			Handler:    _AutograderService_CancelSubmission_Handler,
+		},
+		{
+			MethodName: "SearchUser",
+			Handler:    _AutograderService_SearchUser_Handler,
+		},
+		{
+			MethodName: "SetAdmin",
+			Handler:    _AutograderService_SetAdmin_Handler,
+		},
+		{
+			MethodName: "GetAllUsers",
+			Handler:    _AutograderService_GetAllUsers_Handler,
+		},
+		{
+			MethodName: "GetGradeQueue",
+			Handler:    _AutograderService_GetGradeQueue_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

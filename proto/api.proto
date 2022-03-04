@@ -78,6 +78,7 @@ message SubmissionInfo {
   uint64 score = 4;
   uint64 max_score = 5;
   SubmissionStatus status = 6;
+  PendingRank pending_rank = 7;
 }
 
 message GetSubmissionsInAssignmentResponse {
@@ -169,6 +170,7 @@ message DownloadTokenPayload {
   string real_path = 1;
   string filename = 2;
   bool is_directory = 3;
+  uint64 submission_id = 4;
 }
 
 message GetSubmissionReportRequest {
@@ -188,6 +190,7 @@ message SubscribeSubmissionResponse {
   uint64 score = 1;
   uint64 maxScore = 2;
   SubmissionStatus status = 3;
+  PendingRank pending_rank = 4;
 }
 
 message GetAssignmentRequest {
@@ -612,6 +615,22 @@ message SetAdminResponse {
 
 }
 
+message GetAllUsersRequest {
+
+}
+
+message GetAllUsersResponse {
+  repeated User users = 1;
+}
+
+message GetGradeQueueRequest {
+
+}
+
+message GetGradeQueueResponse {
+
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -663,4 +682,6 @@ service AutograderService {
    rpc CancelSubmission(CancelSubmissionRequest) returns (CancelSubmissionResponse);
    rpc SearchUser(SearchUserRequest) returns (SearchUserResponse);
    rpc SetAdmin(SetAdminRequest) returns (SetAdminResponse);
+   rpc GetAllUsers(GetAllUsersRequest) returns (GetAllUsersResponse);
+   rpc GetGradeQueue(GetGradeQueueRequest) returns (GetGradeQueueResponse);
 }

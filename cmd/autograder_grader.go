@@ -163,26 +163,26 @@ func (g *GraderWorker) sendReports(
 		}
 		if submissionStatus == model_pb.SubmissionStatus_Finished {
 			testcases := report.GetReport().GetTests()
+			wg := &sync.WaitGroup{}
 			for _, testcase := range testcases {
 				if testcase.GetOutputPath() == "" {
 					continue
 				}
+				wg.Add(1)
 				go func(outputPath string) {
 					logger.Debug("OutputFile.Upload", zap.String("outputPath", outputPath))
 					err := g.uploadFile(
 						context.Background(),
 						outputPath,
 					)
+					wg.Done()
 					if err != nil {
 						logger.Error("OutputFile.Upload", zap.String("outputPath", outputPath), zap.Error(err))
 					}
-					logger.Debug("Grader.FS.Remove", zap.String("file", outputPath))
-					err = g.ls.Delete(context.Background(), outputPath)
-					if err != nil {
-						logger.Error("Grader.FS.Remove", zap.String("file", outputPath), zap.Error(err))
-					}
+
 				}(path.Join(fmt.Sprintf("runs/submissions/%d/results/outputs", submissionId), testcase.GetOutputPath()))
 			}
+			wg.Wait()
 		}
 		if submissionStatus == model_pb.SubmissionStatus_Finished ||
 			submissionStatus == model_pb.SubmissionStatus_Cancelled ||
@@ -208,6 +208,13 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 	var reports []*grader_pb.GradeReport
 	logger.Debug("Grader.GradeCallbackEnter")
 	defer logger.Debug("Grader.GradeCallbackExit")
+	defer func(runPath string) {
+		logger.Debug("Grader.FS.Remove", zap.String("file", runPath))
+		err := g.ls.Delete(context.Background(), runPath)
+		if err != nil {
+			logger.Error("Grader.FS.Remove", zap.String("file", runPath), zap.Error(err))
+		}
+	}(fmt.Sprintf("runs/submissions/%d", submissionId))
 	for !buffer.closed || len(reports) > 0 {
 		rpCli, err := g.client.GradeCallback(context.Background())
 		if err != nil {

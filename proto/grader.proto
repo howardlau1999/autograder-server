@@ -34,6 +34,7 @@ message GradeReport {
   SubmissionReport report = 1;
   SubmissionBriefReport brief = 2;
   DockerGraderMetadata docker_metadata = 3;
+  PendingRank pending_rank = 4;
 }
 
 message GradeResponse {

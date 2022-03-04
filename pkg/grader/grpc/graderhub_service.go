@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"container/list"
 	"context"
 	"fmt"
 	"io"
@@ -28,6 +29,11 @@ type GradeRequestQueue struct {
 	closed   bool
 }
 
+type PendingRequest struct {
+	rank    int
+	request *grader_pb.GradeRequest
+}
+
 func (q *GradeRequestQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -50,18 +56,54 @@ type GraderHubService struct {
 
 	onlineMu      *sync.Mutex
 	onlineGraders map[uint64]*model_pb.GraderStatusMetadata
-	onlineCond    *sync.Cond
 
 	submissionSubs map[uint64][]chan *grader_pb.GradeReport
 	subsMu         *sync.Mutex
 	monitorChs     map[uint64]chan *time.Time
 	monitorMu      *sync.Mutex
 
-	queuedMu   *sync.Mutex
-	queuedList map[uint64]*grader_pb.GradeRequest
+	queuedMu        *sync.Mutex
+	schedulerCond   *sync.Cond
+	queuedListIndex map[uint64]*list.Element
+	queuedList      *list.List
 
 	runningMu   *sync.Mutex
 	runningList map[uint64]*grader_pb.GradeRequest
+}
+
+func (g *GraderHubService) removePendingGradeRequest(submissionId uint64) {
+	elem := g.queuedListIndex[submissionId]
+	if elem == nil {
+		return
+	}
+	for p := elem.Next(); p != nil; p = p.Next() {
+		pending := p.Value.(*PendingRequest)
+		pending.rank--
+		g.onPendingRankChanged(pending.request.SubmissionId, pending.rank, g.queuedList.Len()-1)
+	}
+	g.queuedList.Remove(elem)
+	delete(g.queuedListIndex, submissionId)
+}
+
+func (g *GraderHubService) GetPendingRank(submissionId uint64) (rank int, total int) {
+	g.queuedMu.Lock()
+	defer g.queuedMu.Unlock()
+	if elem, ok := g.queuedListIndex[submissionId]; ok {
+		total = g.queuedList.Len()
+		rank = elem.Value.(*PendingRequest).rank
+	}
+	return
+}
+
+func (g *GraderHubService) pushPendingGradeQueue(request *grader_pb.GradeRequest) *list.Element {
+	g.queuedMu.Lock()
+	defer g.queuedMu.Unlock()
+	pending := &PendingRequest{request: request, rank: g.queuedList.Len() + 1}
+	g.onPendingRankChanged(request.SubmissionId, g.queuedList.Len()+1, g.queuedList.Len()+1)
+	elem := g.queuedList.PushBack(pending)
+	g.queuedListIndex[request.SubmissionId] = elem
+	g.schedulerCond.Broadcast()
+	return elem
 }
 
 func (g *GraderHubService) pickGrader(request *grader_pb.GradeRequest) uint64 {
@@ -244,11 +286,14 @@ func (g *GraderHubService) onSubmissionScheduled(submissionId uint64, graderId u
 	if err != nil {
 		logger.Error("GradeHub.ClaimSubmission", zap.Error(err))
 	}
+	zap.L().Debug(
+		"GraderHub.Scheduled",
+		zap.Uint64("submissionId", submissionId),
+		zap.Uint64("graderId", graderId),
+	)
 }
 
 func (g *GraderHubService) onSubmissionQueued(submissionId uint64) {
-	var graderId uint64
-	var request *grader_pb.GradeRequest
 	logger := zap.L().With(zap.Uint64("submissionId", submissionId))
 	err := g.onSubmissionBriefReportUpdate(
 		context.Background(), submissionId, &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Queued},
@@ -256,54 +301,6 @@ func (g *GraderHubService) onSubmissionQueued(submissionId uint64) {
 	if err != nil {
 		logger.Error("GraderHub.UpdateBriefReport", zap.Error(err))
 	}
-	g.onlineMu.Lock()
-	for {
-		g.queuedMu.Lock()
-		request = g.queuedList[submissionId]
-		g.queuedMu.Unlock()
-		if request == nil {
-			g.onlineMu.Unlock()
-			g.onSubmissionCancelled(submissionId)
-			return
-		}
-		graderId = g.pickGrader(request)
-		logger.Debug("GraderHub.PickGrader", zap.Uint64("graderId", graderId))
-		if graderId != 0 {
-			g.onlineMu.Unlock()
-			break
-		}
-		g.onlineCond.Wait()
-	}
-	g.queuedMu.Lock()
-	request = g.queuedList[submissionId]
-	if request == nil {
-		g.queuedMu.Unlock()
-		g.onSubmissionCancelled(submissionId)
-		return
-	}
-	var queue *GradeRequestQueue
-	delete(g.queuedList, submissionId)
-	g.gradeRequestMu.Lock()
-	queue = g.gradeRequestQueues[graderId]
-	g.gradeRequestMu.Unlock()
-	if queue != nil {
-		queue.mu.Lock()
-		if queue.closed {
-			g.queuedMu.Unlock()
-			queue.mu.Unlock()
-			g.onSubmissionQueued(submissionId)
-			return
-		}
-		queue.requests = append(queue.requests, request)
-		queue.cond.Signal()
-		queue.mu.Unlock()
-	}
-	g.runningMu.Lock()
-	g.runningList[submissionId] = request
-	g.runningMu.Unlock()
-	g.onSubmissionScheduled(submissionId, graderId)
-	delete(g.queuedList, submissionId)
-	g.queuedMu.Unlock()
 }
 
 func (g *GraderHubService) Grade(
@@ -390,11 +387,70 @@ func (g *GraderHubService) RegisterGrader(
 	return &grader_pb.RegisterGraderResponse{GraderId: graderId}, nil
 }
 
+func (g *GraderHubService) onPendingRankChanged(submissionId uint64, newRank int, total int) {
+	zap.L().Debug(
+		"GraderHub.Rank.Changed", zap.Uint64("submissionId", submissionId), zap.Int("rank", newRank),
+		zap.Int("total", total),
+	)
+	g.sendGradeReport(
+		submissionId,
+		&grader_pb.GradeReport{PendingRank: &model_pb.PendingRank{Rank: uint64(newRank), Total: uint64(total)}},
+	)
+}
+
+func (g *GraderHubService) scheduler() {
+	zap.L().Debug("GraderHub.Scheduler.Start")
+	defer zap.L().Debug("GraderHub.Scheduler.Exit")
+	for {
+		g.queuedMu.Lock()
+		var cur *list.Element
+		for {
+			cur = g.queuedList.Front()
+			if cur != nil {
+				break
+			}
+			g.schedulerCond.Wait()
+		}
+		for cur != nil {
+			// Try schedule one request
+			pending := cur.Value.(*PendingRequest)
+			g.onlineMu.Lock()
+			graderId := g.pickGrader(pending.request)
+			g.onlineMu.Unlock()
+
+			if graderId != 0 {
+				g.gradeRequestMu.Lock()
+				queue := g.gradeRequestQueues[graderId]
+				g.gradeRequestMu.Unlock()
+				if queue == nil {
+					continue
+				}
+				queue.mu.Lock()
+				if queue.closed {
+					g.queuedMu.Unlock()
+					queue.mu.Unlock()
+					g.onSubmissionQueued(pending.request.SubmissionId)
+					continue
+				}
+				queue.requests = append(queue.requests, pending.request)
+				queue.cond.Signal()
+				queue.mu.Unlock()
+
+				g.removePendingGradeRequest(pending.request.SubmissionId)
+				g.runningMu.Lock()
+				g.runningList[pending.request.SubmissionId] = pending.request
+				g.runningMu.Unlock()
+				g.onSubmissionScheduled(pending.request.SubmissionId, graderId)
+			}
+			cur = cur.Next()
+		}
+		g.queuedMu.Unlock()
+	}
+}
+
 func (g *GraderHubService) queueGradeRequest(req *grader_pb.GradeRequest) {
-	g.queuedMu.Lock()
-	g.queuedList[req.GetSubmissionId()] = req
-	g.queuedMu.Unlock()
-	go g.onSubmissionQueued(req.SubmissionId)
+	g.pushPendingGradeQueue(req)
+	g.onSubmissionQueued(req.SubmissionId)
 }
 
 func (g *GraderHubService) graderRequestSendLoop(
@@ -458,7 +514,7 @@ func (g *GraderHubService) GraderHeartbeat(server grader_pb.GraderHubService_Gra
 
 	go g.graderRequestSendLoop(server, graderId, queue)
 	// The scheduler may have a chance to schedule a grade task now
-	g.onlineCond.Broadcast()
+	g.schedulerCond.Broadcast()
 
 	var tCh chan *time.Time
 	g.monitorMu.Lock()
@@ -527,7 +583,7 @@ func (g *GraderHubService) onSubmissionFinished(submissionId uint64) {
 	g.runningMu.Lock()
 	delete(g.runningList, submissionId)
 	g.runningMu.Unlock()
-	g.onlineCond.Broadcast()
+	g.schedulerCond.Broadcast()
 }
 
 func (g *GraderHubService) onSubmissionCancelled(submissionId uint64) {
@@ -619,13 +675,15 @@ func (g *GraderHubService) CancelGrade(
 ) error {
 	// Queued, not running
 	g.queuedMu.Lock()
-	if _, ok := g.queuedList[submissionId]; ok {
-		delete(g.queuedList, submissionId)
-		g.onSubmissionCancelled(submissionId)
+	if _, ok := g.queuedListIndex[submissionId]; ok {
+
+		g.removePendingGradeRequest(submissionId)
 		g.queuedMu.Unlock()
+		g.onSubmissionCancelled(submissionId)
 		return nil
 	}
 	g.queuedMu.Unlock()
+
 	// Running
 	graderId, err := g.graderRepo.GetGraderIdBySubmissionId(ctx, submissionId)
 	if err != nil {
@@ -647,10 +705,10 @@ func (g *GraderHubService) CancelGrade(
 			return nil
 		}
 		queue.mu.Unlock()
-		g.onSubmissionCancelled(submissionId)
 	} else {
 		g.onSubmissionCancelled(submissionId)
 	}
+
 	return nil
 }
 
@@ -666,13 +724,14 @@ func NewGraderHubService(db *pebble.DB, srr repository.SubmissionReportRepositor
 		queuedMu:             &sync.Mutex{},
 		runningMu:            &sync.Mutex{},
 		runningList:          map[uint64]*grader_pb.GradeRequest{},
-		queuedList:           map[uint64]*grader_pb.GradeRequest{},
+		queuedListIndex:      map[uint64]*list.Element{},
+		queuedList:           list.New(),
 		onlineGraders:        map[uint64]*model_pb.GraderStatusMetadata{},
 		submissionSubs:       map[uint64][]chan *grader_pb.GradeReport{},
 		gradeRequestQueues:   map[uint64]*GradeRequestQueue{},
 		monitorChs:           map[uint64]chan *time.Time{},
 	}
-	svc.onlineCond = sync.NewCond(svc.onlineMu)
+	svc.schedulerCond = sync.NewCond(svc.queuedMu)
 	ids, graders, err := gr.GetAllGraders(context.Background())
 	if err != nil {
 		panic(err)
@@ -691,5 +750,6 @@ func NewGraderHubService(db *pebble.DB, srr repository.SubmissionReportRepositor
 	for id, tCh := range svc.monitorChs {
 		go svc.graderMonitor(id, tCh)
 	}
+	go svc.scheduler()
 	return svc
 }

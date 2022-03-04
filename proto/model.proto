@@ -227,3 +227,8 @@ message GraderStatusMetadata {
   Status status = 3;
   google.protobuf.Timestamp last_heartbeat = 4;
 }
+
+message PendingRank {
+  uint64 rank = 1;
+  uint64 total = 2;
+}
