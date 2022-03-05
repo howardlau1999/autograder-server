@@ -1,15 +1,17 @@
 package repository
 
 import (
-	model_pb "autograder-server/pkg/model/proto"
 	"context"
 	"fmt"
+
+	model_pb "autograder-server/pkg/model/proto"
 	"github.com/cockroachdb/pebble"
 	"google.golang.org/protobuf/proto"
 )
 
 type LeaderboardRepository interface {
 	UpdateLeaderboardEntry(ctx context.Context, assignmentId, userId uint64, entry *model_pb.LeaderboardEntry) error
+	DeleteLeaderboardEntry(ctx context.Context, assignmentId, userId uint64) error
 	GetLeaderboardEntry(ctx context.Context, assignmentId, userId uint64) (*model_pb.LeaderboardEntry, error)
 	GetLeaderboard(ctx context.Context, assignmentId uint64) ([]*model_pb.LeaderboardEntry, error)
 	HasLeaderboard(ctx context.Context, assignmentId uint64) bool
@@ -21,7 +23,23 @@ type KVLeaderboardRepository struct {
 	db *pebble.DB
 }
 
-func (lr *KVLeaderboardRepository) SetLeaderboardAnonymous(ctx context.Context, assignmentId uint64, anonymous bool) error {
+func (lr *KVLeaderboardRepository) DeleteLeaderboardEntry(ctx context.Context, assignmentId, userId uint64) error {
+	_ = lr.db.Delete(lr.getAssignmentUserKey(assignmentId, userId), pebble.Sync)
+	prefix := lr.getAssignmentPrefix(assignmentId)
+	iter := lr.db.NewIter(PrefixIterOptions(prefix))
+	count := 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		count++
+	}
+	if count == 0 {
+		_ = lr.db.Delete(lr.getMarkerId(assignmentId), pebble.Sync)
+	}
+	return nil
+}
+
+func (lr *KVLeaderboardRepository) SetLeaderboardAnonymous(
+	ctx context.Context, assignmentId uint64, anonymous bool,
+) error {
 	if anonymous {
 		return lr.db.Set(lr.getAnonymousMarker(assignmentId), nil, pebble.Sync)
 	}
@@ -37,7 +55,9 @@ func (lr *KVLeaderboardRepository) GetLeaderboardAnonymous(ctx context.Context, 
 	return true
 }
 
-func (lr *KVLeaderboardRepository) GetLeaderboard(ctx context.Context, assignmentId uint64) ([]*model_pb.LeaderboardEntry, error) {
+func (lr *KVLeaderboardRepository) GetLeaderboard(
+	ctx context.Context, assignmentId uint64,
+) ([]*model_pb.LeaderboardEntry, error) {
 	prefix := lr.getAssignmentPrefix(assignmentId)
 	iter := lr.db.NewIter(PrefixIterOptions(prefix))
 	var entries []*model_pb.LeaderboardEntry
@@ -69,7 +89,9 @@ func (lr *KVLeaderboardRepository) getAssignmentUserKey(assignmentId uint64, use
 	return append(lr.getAssignmentPrefix(assignmentId), Uint64ToBytes(userId)...)
 }
 
-func (lr *KVLeaderboardRepository) UpdateLeaderboardEntry(ctx context.Context, assignmentId, userId uint64, entry *model_pb.LeaderboardEntry) error {
+func (lr *KVLeaderboardRepository) UpdateLeaderboardEntry(
+	ctx context.Context, assignmentId, userId uint64, entry *model_pb.LeaderboardEntry,
+) error {
 	key := lr.getAssignmentUserKey(assignmentId, userId)
 	raw, err := proto.Marshal(entry)
 	if err != nil {
@@ -84,7 +106,9 @@ func (lr *KVLeaderboardRepository) UpdateLeaderboardEntry(ctx context.Context, a
 	return lr.db.Set(lr.getMarkerId(assignmentId), nil, pebble.Sync)
 }
 
-func (lr *KVLeaderboardRepository) GetLeaderboardEntry(ctx context.Context, assignmentId, userId uint64) (*model_pb.LeaderboardEntry, error) {
+func (lr *KVLeaderboardRepository) GetLeaderboardEntry(
+	ctx context.Context, assignmentId, userId uint64,
+) (*model_pb.LeaderboardEntry, error) {
 	key := lr.getAssignmentUserKey(assignmentId, userId)
 	raw, closer, err := lr.db.Get(key)
 	if err != nil {

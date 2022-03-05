@@ -659,7 +659,7 @@ func (a *AutograderService) GetLeaderboard(
 		if err != nil {
 			continue
 		}
-		if userId != user.UserId {
+		if !full && userId != user.UserId {
 			entry.UserId = 0
 		}
 		entry.Nickname = dbUser.Nickname
@@ -1203,7 +1203,6 @@ func (a *AutograderService) Login(
 func (a *AutograderService) ActivateSubmission(
 	ctx context.Context, request *autograder_pb.ActivateSubmissionRequest,
 ) (*autograder_pb.ActivateSubmissionResponse, error) {
-	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	submission := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	report, err := a.submissionReportRepo.GetSubmissionReport(ctx, request.GetSubmissionId())
 	if err != nil {
@@ -1213,11 +1212,11 @@ func (a *AutograderService) ActivateSubmission(
 		return &autograder_pb.ActivateSubmissionResponse{Activated: false}, nil
 	}
 	err = a.leaderboardRepo.UpdateLeaderboardEntry(
-		ctx, submission.GetAssignmentId(), user.GetUserId(), &model_pb.LeaderboardEntry{
+		ctx, submission.GetAssignmentId(), submission.GetUserId(), &model_pb.LeaderboardEntry{
 			SubmissionId: request.GetSubmissionId(),
 			SubmittedAt:  submission.GetSubmittedAt(),
 			Items:        report.Leaderboard,
-			UserId:       user.GetUserId(),
+			UserId:       submission.GetUserId(),
 		},
 	)
 	if err != nil {
@@ -1858,6 +1857,13 @@ func (a *AutograderService) PushFile(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	return
+}
+
+func (a *AutograderService) DeleteLeaderboard(
+	ctx context.Context, request *autograder_pb.DeleteLeaderboardRequest,
+) (*autograder_pb.DeleteLeaderboardResponse, error) {
+	_ = a.leaderboardRepo.DeleteLeaderboardEntry(ctx, request.GetAssignmentId(), request.GetUserId())
+	return &autograder_pb.DeleteLeaderboardResponse{}, nil
 }
 
 func NewAutograderServiceServer(
