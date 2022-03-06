@@ -315,8 +315,11 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+		indexHTMLString := rendered.String()
+		indexHTML := strings.NewReader(indexHTMLString)
 		writeTemplate = func(w http.ResponseWriter, r *http.Request) {
-			io.Copy(w, rendered)
+			indexHTML.Reset(indexHTMLString)
+			_, _ = io.Copy(w, indexHTML)
 		}
 	}
 	fsrv := http.FileServer(http.FS(distFS))
