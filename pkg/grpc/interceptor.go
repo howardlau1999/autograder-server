@@ -283,6 +283,7 @@ func (a *AutograderService) initAuthFuncs() {
 				"SearchUser",
 				"SetAdmin",
 				"CreateCourse",
+				"GetAllUsers",
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.RequireAdmin},
 		},

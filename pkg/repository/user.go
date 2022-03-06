@@ -1,10 +1,12 @@
 package repository
 
 import (
-	model_pb "autograder-server/pkg/model/proto"
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strconv"
+
+	model_pb "autograder-server/pkg/model/proto"
 	"github.com/cockroachdb/pebble"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -26,11 +28,31 @@ type UserRepository interface {
 	UnbindGithubId(ctx context.Context, userId uint64) error
 	GetUserIdByGithubId(ctx context.Context, githubId string) (uint64, error)
 	GetUserByGithubId(ctx context.Context, githubId string) (*model_pb.User, uint64, error)
+	GetAllUsers(ctx context.Context) ([]uint64, []*model_pb.User, error)
 }
 
 type KVUserRepository struct {
 	db  *pebble.DB
 	seq Sequencer
+}
+
+func (ur *KVUserRepository) GetAllUsers(ctx context.Context) ([]uint64, []*model_pb.User, error) {
+	prefix := []byte("user:id:")
+	prefixLen := len(prefix)
+	var ids []uint64
+	var users []*model_pb.User
+	iter := ur.db.NewIter(PrefixIterOptions(prefix))
+	for iter.First(); iter.Valid(); iter.Next() {
+		idStr := iter.Key()[prefixLen:]
+		id, _ := strconv.Atoi(string(idStr))
+		user, err := ur.GetUserById(ctx, uint64(id))
+		if err != nil {
+			return nil, nil, err
+		}
+		ids = append(ids, uint64(id))
+		users = append(users, user)
+	}
+	return ids, users, nil
 }
 
 func (ur *KVUserRepository) GetUserIdByUsername(ctx context.Context, username string) (uint64, error) {
@@ -47,7 +69,9 @@ func (ur *KVUserRepository) RemoveCourseMember(ctx context.Context, userId uint6
 	return ur.db.Delete(ur.getCourseKey(userId, courseId), pebble.Sync)
 }
 
-func (ur *KVUserRepository) GetCourseMember(ctx context.Context, userId uint64, courseId uint64) *model_pb.CourseMember {
+func (ur *KVUserRepository) GetCourseMember(
+	ctx context.Context, userId uint64, courseId uint64,
+) *model_pb.CourseMember {
 	key := ur.getCourseKey(userId, courseId)
 	raw, closer, err := ur.db.Get(key)
 	if err != nil {

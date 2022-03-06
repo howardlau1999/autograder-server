@@ -1866,6 +1866,45 @@ func (a *AutograderService) DeleteLeaderboard(
 	return &autograder_pb.DeleteLeaderboardResponse{}, nil
 }
 
+func (a *AutograderService) GetAllUsers(
+	ctx context.Context, request *autograder_pb.GetAllUsersRequest,
+) (*autograder_pb.GetAllUsersResponse, error) {
+	userIds, users, err := a.userRepo.GetAllUsers(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "GET_USERS")
+	}
+	var userInfos []*autograder_pb.GetAllUsersResponse_UserInfo
+	for i := 0; i < len(userIds); i++ {
+		users[i].Password = nil
+		userInfos = append(
+			userInfos, &autograder_pb.GetAllUsersResponse_UserInfo{
+				UserId: userIds[i],
+				User:   users[i],
+			},
+		)
+	}
+	return &autograder_pb.GetAllUsersResponse{Users: userInfos}, nil
+}
+
+func (a *AutograderService) SetAdmin(
+	ctx context.Context, request *autograder_pb.SetAdminRequest,
+) (*autograder_pb.SetAdminResponse, error) {
+	curUser := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	if curUser.GetUserId() == request.GetUserId() || request.GetUserId() == 1 {
+		return &autograder_pb.SetAdminResponse{}, nil
+	}
+	user, err := a.userRepo.GetUserById(ctx, request.GetUserId())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "GET_USER")
+	}
+	user.IsAdmin = request.GetIsAdmin()
+	err = a.userRepo.UpdateUser(ctx, request.GetUserId(), user)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "UPDATE_USER")
+	}
+	return &autograder_pb.SetAdminResponse{}, nil
+}
+
 func NewAutograderServiceServer(
 	db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client,
 	ghOauth2Config *oauth2.Config,

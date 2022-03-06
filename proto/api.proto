@@ -610,6 +610,7 @@ message SearchUserResponse {
 
 message SetAdminRequest {
   uint64 user_id = 1;
+  bool is_admin = 2;
 }
 
 message SetAdminResponse {
@@ -621,7 +622,11 @@ message GetAllUsersRequest {
 }
 
 message GetAllUsersResponse {
-  repeated User users = 1;
+  message UserInfo {
+    uint64 user_id = 1;
+    User user = 2;
+  }
+  repeated UserInfo users = 1;
 }
 
 message GetGradeQueueRequest {
