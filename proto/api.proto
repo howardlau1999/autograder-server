@@ -157,6 +157,7 @@ message UploadTokenPayload {
   uint64 manifest_id = 3;
   string filename = 4;
   uint64 filesize = 5;
+  uint64 upload_limit = 6;
 }
 
 message UserTokenPayload {
@@ -271,6 +272,7 @@ message CreateAssignmentRequest {
   string description = 7;
   ProgrammingAssignmentConfig programming_config = 8;
   SubmissionLimitConfig submission_limit = 9;
+  uint64 upload_limit = 10;
 }
 
 message CreateAssignmentResponse {

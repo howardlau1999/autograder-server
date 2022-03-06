@@ -14,6 +14,7 @@ import (
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/repository"
 	"github.com/cockroachdb/pebble"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -344,6 +345,9 @@ func (g *GraderHubService) GetAllMetadata(
 func (g *GraderHubService) RegisterGrader(
 	ctx context.Context, request *grader_pb.RegisterGraderRequest,
 ) (*grader_pb.RegisterGraderResponse, error) {
+	if request.GetToken() != viper.GetString("grader.token") {
+		return nil, status.Error(codes.PermissionDenied, "INVALID_TOKEN")
+	}
 	p, ok := peer.FromContext(ctx)
 	if !ok {
 		return nil, status.Error(codes.Unavailable, "GET_PEER")

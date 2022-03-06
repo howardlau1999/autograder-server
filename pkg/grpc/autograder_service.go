@@ -74,6 +74,7 @@ var UploadJWTSignKey = []byte("upload-token-sign-key")
 var UserJWTSignKey = []byte("user-token-sign-key")
 var ResetCodeMax = 900000
 
+const MaxMultipartFormParseMemory = 10 * 1024 * 1024
 const PasswordResetSubject = "Autograder 密码重置验证码"
 const PasswordResetTemplate = "您的密码重置验证码为：%s，10 分钟内有效。\nAutograder"
 const PasswordResetRepoType = "password_reset"
@@ -523,7 +524,13 @@ func (a *AutograderService) DeleteFileInManifest(
 		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
 	}
 	manifestId := request.GetManifestId()
-	err := a.ls.Delete(ctx, filepath.Join(a.getManifestPath(manifestId), filename))
+	mu, err := a.manifestRepo.LockManifest(ctx, manifestId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_MANIFEST_ID")
+	}
+	_, _ = a.manifestRepo.DeleteFileInManifest(ctx, filename, manifestId)
+	mu.Unlock()
+	err = a.ls.Delete(ctx, filepath.Join(a.getManifestPath(manifestId), filename))
 	if err != nil && err != os.ErrNotExist {
 		return nil, status.Error(codes.InvalidArgument, "DELETE_FAILED")
 	}
@@ -550,6 +557,7 @@ func (a *AutograderService) CreateAssignment(
 	assignment.CourseId = request.GetCourseId()
 	assignment.ProgrammingConfig = request.GetProgrammingConfig()
 	assignment.SubmissionLimit = request.GetSubmissionLimit()
+	assignment.UploadLimit = request.GetUploadLimit()
 	if len(assignment.Name) == 0 || len(assignment.Name) > 256 {
 		return nil, status.Error(codes.InvalidArgument, "NAME")
 	}
@@ -821,7 +829,10 @@ func (a *AutograderService) CreateManifest(
 	ctx context.Context, request *autograder_pb.CreateManifestRequest,
 ) (*autograder_pb.CreateManifestResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
-	id, err := a.manifestRepo.CreateManifest(nil, user.GetUserId(), request.GetAssignmentId())
+	assignment := ctx.Value(assignmentCtxKey{}).(*model_pb.Assignment)
+	id, err := a.manifestRepo.CreateManifest(
+		nil, user.GetUserId(), request.GetAssignmentId(), assignment.GetUploadLimit(),
+	)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "CREATE_MANIFEST")
 	}
@@ -935,21 +946,43 @@ func (a *AutograderService) signPayloadToken(key []byte, payload proto.Message, 
 func (a *AutograderService) InitUpload(
 	ctx context.Context, request *autograder_pb.InitUploadRequest,
 ) (*autograder_pb.InitUploadResponse, error) {
+	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
+	manifest, err := a.manifestRepo.GetManifest(ctx, request.GetManifestId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "INVALID_MANIFEST_ID")
+	}
+	if manifest.GetUserId() != user.GetUserId() {
+		return nil, status.Error(codes.InvalidArgument, "DIFFERENT_USER")
+	}
+	mu, err := a.manifestRepo.LockManifest(ctx, request.GetManifestId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "LOCK_MANIFEST")
+	}
+	total, err := a.manifestRepo.GetManifestFilesize(ctx, request.GetManifestId())
+	originalFile, _ := a.manifestRepo.GetManifestFileMetadata(
+		ctx, request.GetFilename(), request.GetManifestId(),
+	)
+	mu.Unlock()
+	if err != nil {
+		return nil, status.Error(codes.Internal, "GET_SIZE")
+	}
+	if originalFile != nil {
+		total -= originalFile.GetFilesize()
+	}
+	if request.GetFilesize() == 0 || total+request.GetFilesize() > manifest.GetUploadLimit() {
+		return nil, status.Error(codes.ResourceExhausted, "NO_SPACE")
+	}
 	filename := request.GetFilename()
 	if isFilenameInvalid(filename) {
-
 		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
-	}
-	_, err := a.manifestRepo.AddFileToManifest(ctx, filename, request.GetManifestId())
-	if err != nil {
-		return nil, status.Error(codes.Internal, "ADD_FILES")
 	}
 	key := UploadJWTSignKey
 
 	payload := &autograder_pb.UploadTokenPayload{
-		ManifestId: request.ManifestId,
-		Filename:   path.Clean(filename),
-		Filesize:   request.GetFilesize(),
+		ManifestId:  request.ManifestId,
+		Filename:    path.Clean(filename),
+		Filesize:    request.GetFilesize(),
+		UploadLimit: manifest.GetUploadLimit(),
 	}
 	ss, err := a.signPayloadToken(key, payload, time.Now().Add(1*time.Minute))
 	if err != nil {
@@ -1384,15 +1417,19 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	err = r.ParseMultipartForm(10 * 1024 * 1024)
+	err = r.ParseMultipartForm(MaxMultipartFormParseMemory)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	uploadFile, _, err := r.FormFile("file")
+	uploadFile, header, err := r.FormFile("file")
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if header.Size <= 0 {
+		w.WriteHeader(http.StatusLengthRequired)
 		return
 	}
 	fileHeader := make([]byte, 512)
@@ -1407,7 +1444,33 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	// TODO: filter MIME
-	destPath := filepath.Join(a.getManifestPath(payloadPB.GetManifestId()), payloadPB.Filename)
+	mu, err := a.manifestRepo.LockManifest(r.Context(), payloadPB.GetManifestId())
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	originalFile, err := a.manifestRepo.GetManifestFileMetadata(
+		r.Context(), payloadPB.GetFilename(), payloadPB.GetManifestId(),
+	)
+	if originalFile != nil {
+		_, err = a.manifestRepo.DeleteFileInManifest(r.Context(), payloadPB.GetFilename(), payloadPB.GetManifestId())
+		if err != nil {
+			zap.L().Error("FileUpload.CleanupOld", zap.Error(err))
+		}
+	}
+	current, err := a.manifestRepo.GetManifestFilesize(r.Context(), payloadPB.GetManifestId())
+	if err != nil {
+		mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if current+uint64(header.Size) > payloadPB.GetUploadLimit() {
+		mu.Unlock()
+		w.WriteHeader(http.StatusNotAcceptable)
+		return
+	}
+	mu.Unlock()
+	destPath := filepath.Join(a.getManifestPath(payloadPB.GetManifestId()), payloadPB.GetFilename())
 	err = a.ls.Put(
 		r.Context(),
 		destPath,
@@ -1415,6 +1478,21 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 	)
 	if err != nil {
 		zap.L().Error("FileUpload.PutFile", zap.Error(err))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	mu, err = a.manifestRepo.LockManifest(r.Context(), payloadPB.GetManifestId())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	_, err = a.manifestRepo.AddFileToManifest(
+		r.Context(), payloadPB.GetFilename(), payloadPB.GetManifestId(),
+		uint64(header.Size),
+	)
+	mu.Unlock()
+	if err != nil {
+		zap.L().Error("FileUpload.AddFileToManifest", zap.Error(err))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

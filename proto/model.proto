@@ -86,6 +86,7 @@ message Assignment {
   ProgrammingAssignmentConfig programming_config = 8;
   bool published = 9;
   SubmissionLimitConfig submission_limit = 10;
+  uint64 upload_limit = 11;
 }
 
 enum TestcaseVisibility {
@@ -180,7 +181,7 @@ message Mergeable {
     repeated uint64 list = 1;
   }
   oneof mergeable_oneof {
-    uint64 counter = 1;
+    int64 counter = 1;
     StringList strings = 2;
     IdList ids = 3;
   }
@@ -190,6 +191,12 @@ message ManifestMetadata {
   google.protobuf.Timestamp created_at = 1;
   uint64 user_id = 2;
   uint64 assignment_id = 3;
+  uint64 upload_limit = 4;
+}
+
+message ManifestFileMetadata {
+  uint64 manifest_id = 1;
+  uint64 filesize = 2;
 }
 
 message VerificationCodeMetadata {

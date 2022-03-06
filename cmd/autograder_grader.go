@@ -362,7 +362,7 @@ func (g *GraderWorker) WorkLoop() {
 	concurrency := uint64(viper.GetUint("grader.concurrency"))
 	g.dockerGrader = grader.NewDockerProgrammingGrader(int(concurrency))
 	registerRequest := &grader_pb.RegisterGraderRequest{
-		Token: "",
+		Token: viper.GetString("grader.token"),
 		Info: &model_pb.GraderInfo{
 			Hostname:    viper.GetString("grader.hostname"),
 			Tags:        strings.Split(viper.GetString("grader.tags"), ","),
