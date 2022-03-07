@@ -92,6 +92,14 @@ func truncateOutput(output string, maxLen int, prompt string) string {
 	return output[:halfLen] + prompt + output[outputLen-halfLen:]
 }
 
+func (d *DockerProgrammingGrader) StreamLog(ctx context.Context, containerId string) (io.ReadCloser, error) {
+	r, err := d.cli.ContainerLogs(
+		ctx, containerId,
+		types.ContainerLogsOptions{Follow: true, Tail: "300", ShowStderr: true, ShowStdout: true},
+	)
+	return r, err
+}
+
 func (d *DockerProgrammingGrader) PullImage(image string) error {
 	closer, err := d.cli.ImagePull(context.Background(), image, types.ImagePullOptions{})
 	if err != nil {
@@ -122,8 +130,10 @@ const (
 
 func (d *DockerProgrammingGrader) runDocker(
 	ctx context.Context, basePath string, submissionId uint64, submission *model_pb.Submission,
-	config *model_pb.ProgrammingAssignmentConfig, containerIdCh chan string,
+	config *model_pb.ProgrammingAssignmentConfig, containerIdCh chan string, containerStartCh chan bool,
 ) (internalError int64, exitCode int64, resultsJSONPath string, err error) {
+	defer close(containerIdCh)
+	defer close(containerStartCh)
 	logger := GetGraderLogger(ctx).With(zap.Uint64("submissionId", submissionId), zap.String("image", config.Image))
 	logger.Debug("Docker.Run.Enter")
 	defer logger.Debug("Docker.Run.Exit")
@@ -174,7 +184,7 @@ func (d *DockerProgrammingGrader) runDocker(
 		StdinOnce:    false,
 		Env:          nil,
 		Entrypoint: []string{
-			"sh", "-c", "/autograder/run > /autograder/results/stdout 2> /autograder/results/stderr",
+			"sh", "-c", "/autograder/run 2> stderr",
 		},
 		Image:      config.Image,
 		Volumes:    nil,
@@ -222,7 +232,6 @@ func (d *DockerProgrammingGrader) runDocker(
 	defer d.RemoveContainerBackground(logger, containerId)
 	logger.Debug("Docker.Run.ContainerCreated")
 	containerIdCh <- containerId
-	close(containerIdCh)
 	doneC, errC := d.cli.ContainerWait(ctx, containerId, container.WaitConditionNextExit)
 	err = d.cli.ContainerStart(ctx, containerId, types.ContainerStartOptions{})
 	if err != nil {
@@ -234,6 +243,7 @@ func (d *DockerProgrammingGrader) runDocker(
 		logger.Error("Docker.Run.StartContainer")
 		return
 	}
+	containerStartCh <- true
 	logger.Debug("Docker.Run.ContainerStarted")
 	timeout := 5 * time.Minute
 	if config.GetTimeout() > 0 {
@@ -313,16 +323,28 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 	}
 	logger := GetGraderLogger(ctx).With(zap.Uint64("submissionId", submissionId))
 	containerIdCh := make(chan string)
+	containerStartCh := make(chan bool)
 	go func() {
 		containerId := <-containerIdCh
-		notifyC <- &grader_pb.GradeReport{
-			DockerMetadata: &grader_pb.DockerGraderMetadata{
-				SubmissionId: submissionId, ContainerId: containerId,
-			},
+		m := &grader_pb.DockerGraderMetadata{
+			SubmissionId: submissionId, ContainerId: containerId,
+		}
+		if containerId != "" {
+			m.Created = true
+			notifyC <- &grader_pb.GradeReport{
+				DockerMetadata: m,
+			}
+			started := <-containerStartCh
+			m.Started = started
+			if started {
+				notifyC <- &grader_pb.GradeReport{
+					DockerMetadata: m,
+				}
+			}
 		}
 	}()
 	internalError, exitCode, resultsJSONPath, err := d.runDocker(
-		ctx, basePath, submissionId, submission, config, containerIdCh,
+		ctx, basePath, submissionId, submission, config, containerIdCh, containerStartCh,
 	)
 	if err == context.Canceled {
 		briefPB.Status = model_pb.SubmissionStatus_Cancelled

@@ -1983,6 +1983,24 @@ func (a *AutograderService) SetAdmin(
 	return &autograder_pb.SetAdminResponse{}, nil
 }
 
+func (a *AutograderService) StreamLog(
+	request *autograder_pb.WebStreamLogRequest,
+	server autograder_pb.AutograderService_StreamLogServer,
+) error {
+	ctx := server.Context()
+	ch, err := a.graderHubSvc.StreamLog(ctx, request.GetSubmissionId())
+	if err != nil {
+		return status.Error(codes.Internal, "STREAM_LOG")
+	}
+	for data := range ch {
+		err := server.SendMsg(&autograder_pb.WebStreamLogResponse{Data: data})
+		if err != nil {
+			break
+		}
+	}
+	return nil
+}
+
 func NewAutograderServiceServer(
 	db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client,
 	ghOauth2Config *oauth2.Config,

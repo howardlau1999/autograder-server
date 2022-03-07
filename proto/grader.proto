@@ -28,6 +28,8 @@ message GradeRequest {
   Submission submission = 2;
   ProgrammingAssignmentConfig config = 3;
   bool is_cancel = 4;
+  bool is_stream_log = 5;
+  string request_id = 6;
 }
 
 message GradeReport {
@@ -77,6 +79,17 @@ message GetMetadataResponse {
 message DockerGraderMetadata {
   uint64 submission_id = 1;
   string container_id = 2;
+  bool started = 3;
+  bool created = 4;
+}
+
+message StreamLogResponse {
+  string reqeust_id = 1;
+  bytes data = 2;
+}
+
+message StreamLogCallbackResponse {
+
 }
 
 service GraderHubService {
@@ -87,4 +100,5 @@ service GraderHubService {
   rpc GetMetadata(GetMetadataRequest) returns (GetMetadataResponse);
   rpc PutMetadata(PutMetadataRequest) returns (PutMetadataResponse);
   rpc GetAllMetadata(GetAllMetadataRequest) returns (GetAllMetadataResponse);
+  rpc StreamLogCallback(stream StreamLogResponse) returns (StreamLogCallbackResponse);
 }

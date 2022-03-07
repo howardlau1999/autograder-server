@@ -3,6 +3,7 @@ package grpc
 import (
 	"container/list"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/repository"
 	"github.com/cockroachdb/pebble"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -47,6 +49,11 @@ func NewGradeRequestQueue() *GradeRequestQueue {
 	return &GradeRequestQueue{mu: mu, cond: cond}
 }
 
+type ClientLogStream struct {
+	ch  chan []byte
+	ctx context.Context
+}
+
 type GraderHubService struct {
 	grader_pb.UnimplementedGraderHubServiceServer
 	token                string
@@ -62,6 +69,9 @@ type GraderHubService struct {
 	subsMu         *sync.Mutex
 	monitorChs     map[uint64]chan *time.Time
 	monitorMu      *sync.Mutex
+
+	logStreams  map[uint64]map[string]*ClientLogStream
+	logStreamMu *sync.Mutex
 
 	queuedMu        *sync.Mutex
 	schedulerCond   *sync.Cond
@@ -148,6 +158,11 @@ func (g *GraderHubService) onGraderOffline(graderId uint64) {
 	g.onlineMu.Lock()
 	delete(g.onlineGraders, graderId)
 	g.onlineMu.Unlock()
+
+	g.logStreamMu.Lock()
+	// We don't need to close channels because the stream loop will close it
+	delete(g.logStreams, graderId)
+	g.logStreamMu.Unlock()
 
 	g.gradeRequestMu.Lock()
 	queue := g.gradeRequestQueues[graderId]
@@ -434,15 +449,15 @@ func (g *GraderHubService) scheduler() {
 					g.onSubmissionQueued(pending.request.SubmissionId)
 					continue
 				}
-				queue.requests = append(queue.requests, pending.request)
-				queue.cond.Signal()
-				queue.mu.Unlock()
 
 				g.removePendingGradeRequest(pending.request.SubmissionId)
 				g.runningMu.Lock()
 				g.runningList[pending.request.SubmissionId] = pending.request
 				g.runningMu.Unlock()
 				g.onSubmissionScheduled(pending.request.SubmissionId, graderId)
+				queue.requests = append(queue.requests, pending.request)
+				queue.cond.Signal()
+				queue.mu.Unlock()
 			}
 			cur = cur.Next()
 		}
@@ -450,6 +465,28 @@ func (g *GraderHubService) scheduler() {
 		g.schedulerCond.Wait()
 		g.queuedMu.Unlock()
 	}
+}
+
+func (g *GraderHubService) sendGraderGradeRequest(graderId uint64, req *grader_pb.GradeRequest) bool {
+
+	g.gradeRequestMu.Lock()
+	queue := g.gradeRequestQueues[graderId]
+	g.gradeRequestMu.Unlock()
+	if queue != nil {
+		queue.mu.Lock()
+		if !queue.closed {
+			queue.requests = append(
+				queue.requests,
+				req,
+			)
+			queue.mu.Unlock()
+			queue.cond.Signal()
+			return true
+		}
+		queue.mu.Unlock()
+		return false
+	}
+	return false
 }
 
 func (g *GraderHubService) queueGradeRequest(req *grader_pb.GradeRequest) {
@@ -478,17 +515,14 @@ func (g *GraderHubService) graderRequestSendLoop(
 		var i int
 		for i = 0; i < len(requests); i++ {
 			r := requests[i]
-			logger.Debug("GraderHeartbeat.SendGradeRequest", zap.Stringer("request", r))
 			err = server.Send(&grader_pb.GraderHeartbeatResponse{Requests: []*grader_pb.GradeRequest{r}})
 			if err != nil {
 				logger.Error("GraderHeartbeat.Send", zap.Error(err))
 				break
 			}
+			logger.Debug("GraderHeartbeat.SendGradeRequest", zap.Stringer("request", r))
 		}
 		if err != nil {
-			for j := i; i < len(requests); j++ {
-				g.queueGradeRequest(requests[j])
-			}
 			break
 		}
 	}
@@ -635,6 +669,94 @@ func (g *GraderHubService) closeAllSubmissionSubscribers(submissionId uint64) {
 	g.subsMu.Unlock()
 }
 
+func (g *GraderHubService) StreamLog(ctx context.Context, submissionId uint64) (chan []byte, error) {
+	requestId := uuid.NewString()
+	logger := zap.L().With(zap.Uint64("submissionId", submissionId), zap.String("requestId", requestId))
+	logger.Debug("StreamLog.Start")
+	defer logger.Debug("StreamLog.Exit")
+	graderId, err := g.graderRepo.GetGraderIdBySubmissionId(ctx, submissionId)
+	if err != nil {
+		return nil, err
+	}
+	g.gradeRequestMu.Lock()
+	queue := g.gradeRequestQueues[graderId]
+	g.gradeRequestMu.Unlock()
+	if queue != nil {
+		queue.mu.Lock()
+		if !queue.closed {
+			ch := make(chan []byte)
+			g.logStreamMu.Lock()
+			if g.logStreams[graderId] == nil {
+				g.logStreams[graderId] = map[string]*ClientLogStream{}
+			}
+			g.logStreams[graderId][requestId] = &ClientLogStream{ctx: ctx, ch: ch}
+			g.logStreamMu.Unlock()
+			queue.requests = append(
+				queue.requests,
+				&grader_pb.GradeRequest{IsStreamLog: true, SubmissionId: submissionId, RequestId: requestId},
+			)
+			queue.mu.Unlock()
+			queue.cond.Signal()
+			go func() {
+				<-ctx.Done()
+				logger.Debug("StreamLog.Client.Done")
+				g.sendGraderGradeRequest(
+					graderId, &grader_pb.GradeRequest{
+						IsStreamLog: true, SubmissionId: submissionId, RequestId: requestId, IsCancel: true,
+					},
+				)
+			}()
+			return ch, nil
+		}
+		queue.mu.Unlock()
+		return nil, errors.New("grader offline")
+	}
+	return nil, errors.New("grader offline")
+}
+
+func (g *GraderHubService) StreamLogCallback(server grader_pb.GraderHubService_StreamLogCallbackServer) error {
+	r := &grader_pb.StreamLogResponse{}
+	var err error
+	var client *ClientLogStream
+	var logStream chan []byte
+	md, ok := metadata.FromIncomingContext(server.Context())
+	if !ok {
+		return nil
+	}
+	graderIdStr := md.Get("graderId")[0]
+	graderIdInt, err := strconv.Atoi(graderIdStr)
+	if err != nil {
+		return err
+	}
+	graderId := uint64(graderIdInt)
+	requestId := md.Get("requestId")[0]
+	g.logStreamMu.Lock()
+	client = g.logStreams[graderId][requestId]
+	g.logStreamMu.Unlock()
+	logger := zap.L().With(zap.Uint64("graderId", graderId), zap.String("requestId", requestId))
+	logger.Debug("LogStreamCallback.Start")
+	defer logger.Debug("LogStreamCallback.Exit")
+	if client == nil {
+		return nil
+	}
+	logStream = client.ch
+	for {
+		err = server.RecvMsg(r)
+		if err != nil {
+			break
+		}
+		if client.ctx.Err() != nil {
+			break
+		}
+		logStream <- r.Data
+	}
+	g.logStreamMu.Lock()
+	delete(g.logStreams[graderId], requestId)
+	g.logStreamMu.Unlock()
+	close(logStream)
+	return nil
+}
+
 func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_GradeCallbackServer) error {
 	r := &grader_pb.GradeResponse{}
 	var submissionId uint64
@@ -727,6 +849,8 @@ func NewGraderHubService(db *pebble.DB, srr repository.SubmissionReportRepositor
 		subsMu:               &sync.Mutex{},
 		queuedMu:             &sync.Mutex{},
 		runningMu:            &sync.Mutex{},
+		logStreamMu:          &sync.Mutex{},
+		logStreams:           map[uint64]map[string]*ClientLogStream{},
 		runningList:          map[uint64]*grader_pb.GradeRequest{},
 		queuedListIndex:      map[uint64]*list.Element{},
 		queuedList:           list.New(),

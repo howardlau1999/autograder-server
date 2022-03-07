@@ -648,6 +648,14 @@ message DeleteLeaderboardResponse {
 
 }
 
+message WebStreamLogRequest {
+  uint64 submission_id = 1;
+}
+
+message WebStreamLogResponse {
+  bytes data = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -702,4 +710,5 @@ service AutograderService {
    rpc GetAllUsers(GetAllUsersRequest) returns (GetAllUsersResponse);
    rpc GetGradeQueue(GetGradeQueueRequest) returns (GetGradeQueueResponse);
    rpc DeleteLeaderboard(DeleteLeaderboardRequest) returns (DeleteLeaderboardResponse);
+   rpc StreamLog(WebStreamLogRequest) returns (stream WebStreamLogResponse);
 }

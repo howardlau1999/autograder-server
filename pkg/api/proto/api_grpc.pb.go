@@ -75,6 +75,7 @@ type AutograderServiceClient interface {
 	GetAllUsers(ctx context.Context, in *GetAllUsersRequest, opts ...grpc.CallOption) (*GetAllUsersResponse, error)
 	GetGradeQueue(ctx context.Context, in *GetGradeQueueRequest, opts ...grpc.CallOption) (*GetGradeQueueResponse, error)
 	DeleteLeaderboard(ctx context.Context, in *DeleteLeaderboardRequest, opts ...grpc.CallOption) (*DeleteLeaderboardResponse, error)
+	StreamLog(ctx context.Context, in *WebStreamLogRequest, opts ...grpc.CallOption) (AutograderService_StreamLogClient, error)
 }
 
 type autograderServiceClient struct {
@@ -585,6 +586,38 @@ func (c *autograderServiceClient) DeleteLeaderboard(ctx context.Context, in *Del
 	return out, nil
 }
 
+func (c *autograderServiceClient) StreamLog(ctx context.Context, in *WebStreamLogRequest, opts ...grpc.CallOption) (AutograderService_StreamLogClient, error) {
+	stream, err := c.cc.NewStream(ctx, &AutograderService_ServiceDesc.Streams[1], "/AutograderService/StreamLog", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &autograderServiceStreamLogClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type AutograderService_StreamLogClient interface {
+	Recv() (*WebStreamLogResponse, error)
+	grpc.ClientStream
+}
+
+type autograderServiceStreamLogClient struct {
+	grpc.ClientStream
+}
+
+func (x *autograderServiceStreamLogClient) Recv() (*WebStreamLogResponse, error) {
+	m := new(WebStreamLogResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -642,6 +675,7 @@ type AutograderServiceServer interface {
 	GetAllUsers(context.Context, *GetAllUsersRequest) (*GetAllUsersResponse, error)
 	GetGradeQueue(context.Context, *GetGradeQueueRequest) (*GetGradeQueueResponse, error)
 	DeleteLeaderboard(context.Context, *DeleteLeaderboardRequest) (*DeleteLeaderboardResponse, error)
+	StreamLog(*WebStreamLogRequest, AutograderService_StreamLogServer) error
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -807,6 +841,9 @@ func (UnimplementedAutograderServiceServer) GetGradeQueue(context.Context, *GetG
 }
 func (UnimplementedAutograderServiceServer) DeleteLeaderboard(context.Context, *DeleteLeaderboardRequest) (*DeleteLeaderboardResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteLeaderboard not implemented")
+}
+func (UnimplementedAutograderServiceServer) StreamLog(*WebStreamLogRequest, AutograderService_StreamLogServer) error {
+	return status.Errorf(codes.Unimplemented, "method StreamLog not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1778,6 +1815,27 @@ func _AutograderService_DeleteLeaderboard_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutograderService_StreamLog_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WebStreamLogRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AutograderServiceServer).StreamLog(m, &autograderServiceStreamLogServer{stream})
+}
+
+type AutograderService_StreamLogServer interface {
+	Send(*WebStreamLogResponse) error
+	grpc.ServerStream
+}
+
+type autograderServiceStreamLogServer struct {
+	grpc.ServerStream
+}
+
+func (x *autograderServiceStreamLogServer) Send(m *WebStreamLogResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1998,6 +2056,11 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "SubscribeSubmission",
 			Handler:       _AutograderService_SubscribeSubmission_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamLog",
+			Handler:       _AutograderService_StreamLog_Handler,
 			ServerStreams: true,
 		},
 	},

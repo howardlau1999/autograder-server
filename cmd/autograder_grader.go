@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,20 +52,34 @@ func (r *GraderEnvKeyReplacer) Replace(s string) string {
 	return strings.ReplaceAll(v, "-", "_")
 }
 
+type SubmissionContext struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+type LogStreamContext struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
 type GraderWorker struct {
-	runningSubs  map[uint64]*grader_pb.GradeRequest
-	cancelChs    map[uint64]context.CancelFunc
-	mu           *sync.Mutex
-	client       grader_pb.GraderHubServiceClient
-	dockerGrader *grader.DockerProgrammingGrader
-	graderId     uint64
-	basePath     string
-	hubAddress   string
-	token        string
-	ls           *storage.LocalStorage
-	sfs          *storage.SimpleHTTPFS
-	httpTimeout  time.Duration
-	rpcTimeout   time.Duration
+	runningSubs      map[uint64]*grader_pb.GradeRequest
+	cancelChs        map[uint64]*SubmissionContext
+	containerIds     map[uint64]string
+	logStreams       map[uint64]map[string]*LogStreamContext
+	mu               *sync.Mutex
+	client           grader_pb.GraderHubServiceClient
+	dockerGrader     *grader.DockerProgrammingGrader
+	graderId         uint64
+	basePath         string
+	hubAddress       string
+	token            string
+	ls               *storage.LocalStorage
+	sfs              *storage.SimpleHTTPFS
+	httpTimeout      time.Duration
+	rpcTimeout       time.Duration
+	containerWaiters map[string]map[string]chan bool
+	containerStarted map[string]bool
 }
 
 type ReportBuffer struct {
@@ -157,6 +174,22 @@ func (g *GraderWorker) sendReports(
 	for i = 0; i < len(*reports); i++ {
 		report := (*reports)[i]
 		if report.GetDockerMetadata() != nil {
+			g.mu.Lock()
+			g.containerIds[report.GetDockerMetadata().GetSubmissionId()] = report.GetDockerMetadata().GetContainerId()
+			g.mu.Unlock()
+
+			if report.GetDockerMetadata().GetStarted() {
+				g.mu.Lock()
+				g.containerStarted[report.GetDockerMetadata().GetContainerId()] = true
+				waiters := g.containerWaiters[report.GetDockerMetadata().GetContainerId()]
+				delete(g.containerWaiters, report.GetDockerMetadata().GetContainerId())
+				g.mu.Unlock()
+				for _, ch := range waiters {
+					ch <- true
+					close(ch)
+				}
+			}
+
 			value, err := proto.Marshal(report.GetDockerMetadata())
 			if err != nil {
 				logger.Error("Grader.MarshalMetadata", zap.Error(err))
@@ -263,6 +296,10 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 		err = g.sendReports(rpCli, submissionId, &reports, logger)
 		if err != nil {
 			time.Sleep(1 * time.Second)
+			err := rpCli.CloseSend()
+			if err != nil {
+				logger.Error("Grader.CloseGradeCallback", zap.Error(err))
+			}
 			continue
 		}
 		for {
@@ -283,6 +320,10 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			buffer.mu.Unlock()
 			err = g.sendReports(rpCli, submissionId, &reports, logger)
 			if err != nil {
+				err := rpCli.CloseSend()
+				if err != nil {
+					logger.Error("Grader.CloseGradeCallback", zap.Error(err))
+				}
 				time.Sleep(1 * time.Second)
 				break
 			}
@@ -296,11 +337,126 @@ const ErrDownloadFile = -102
 func (g *GraderWorker) onSubmissionFinished(submissionId uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	cancel := g.cancelChs[submissionId]
-	if cancel != nil {
-		cancel()
+	ctx := g.cancelChs[submissionId]
+	if ctx != nil {
+		ctx.cancel()
 	}
 	delete(g.cancelChs, submissionId)
+	for _, ch := range g.containerWaiters[g.containerIds[submissionId]] {
+		close(ch)
+	}
+	delete(g.containerWaiters, g.containerIds[submissionId])
+	delete(g.containerIds, submissionId)
+	for _, c := range g.logStreams[submissionId] {
+		c.cancel()
+	}
+	delete(g.logStreams, submissionId)
+}
+
+func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
+	logger := zap.L().With(
+		zap.Uint64("submissionId", submissionId), zap.String("requestId", requestId),
+	)
+	logger.Debug("StreamLog.Start")
+	defer logger.Debug("StreamLog.Exit")
+	var subCtx *SubmissionContext
+	var containerId string
+	var ok bool
+	g.mu.Lock()
+	subCtx, ok = g.cancelChs[submissionId]
+	containerId = g.containerIds[submissionId]
+	g.mu.Unlock()
+	parentCtx := context.Background()
+	if subCtx != nil {
+		parentCtx = subCtx.ctx
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
+	ctx = metadata.AppendToOutgoingContext(
+		ctx, "submissionId", strconv.Itoa(int(submissionId)), "requestId", requestId, "graderId",
+		strconv.Itoa(int(g.graderId)),
+	)
+	g.mu.Lock()
+	if g.logStreams[submissionId] == nil {
+		g.logStreams[submissionId] = map[string]*LogStreamContext{}
+	}
+	g.logStreams[submissionId][requestId] = &LogStreamContext{ctx: ctx, cancel: cancel}
+	g.mu.Unlock()
+	slCli, err := g.client.StreamLogCallback(ctx)
+	if err != nil {
+		logger.Error("StreamLog.Callback", zap.Error(err))
+		return
+	}
+	defer func() {
+		err = slCli.CloseSend()
+		if err != nil {
+			logger.Error("StreamLog.Close", zap.Error(err))
+		}
+	}()
+	if !ok {
+		logger.Debug("StreamLog.SubmissionNotFound")
+		return
+	}
+	// Wait For Container Start
+	// TODO find a better way
+	err = retry.Do(
+		func() error {
+			if containerId != "" {
+				return nil
+			}
+			g.mu.Lock()
+			containerId = g.containerIds[submissionId]
+			g.mu.Unlock()
+			if containerId == "" {
+				return errors.New("container not found")
+			}
+			return nil
+		},
+		retry.Attempts(1000),
+	)
+	if containerId == "" {
+		return
+	}
+	var r io.ReadCloser
+	g.mu.Lock()
+	if _, found := g.containerStarted[containerId]; !found {
+		ch := make(chan bool)
+		if g.containerWaiters[containerId] == nil {
+			g.containerWaiters[containerId] = map[string]chan bool{}
+		}
+		g.containerWaiters[containerId][requestId] = ch
+		g.mu.Unlock()
+		started := <-ch
+		if !started {
+			return
+		}
+		logger.Debug("StreamLog.ContainerStart", zap.String("containerId", containerId))
+	} else {
+		g.mu.Unlock()
+	}
+	r, err = g.dockerGrader.StreamLog(ctx, containerId)
+	if err != nil {
+		logger.Error("StreamLog.Docker.ContainerLogs", zap.Error(err))
+		return
+	}
+	defer r.Close()
+	go func() {
+		<-ctx.Done()
+		r.Close()
+	}()
+	buffer := make([]byte, 32*1024, 32*1024)
+	for {
+		n, err := r.Read(buffer)
+		if err != nil {
+			logger.Error("StreamLog.Read", zap.Error(err))
+			break
+		}
+		err = slCli.Send(&grader_pb.StreamLogResponse{Data: buffer[:n]})
+		if err != nil {
+			logger.Error("StreamLog.Send", zap.Error(err))
+			break
+		}
+	}
 }
 
 func (g *GraderWorker) gradeOneSubmission(
@@ -310,9 +466,13 @@ func (g *GraderWorker) gradeOneSubmission(
 	notifyC := make(chan *grader_pb.GradeReport)
 	buffer := NewReportBuffer()
 	g.mu.Lock()
-	g.cancelChs[req.SubmissionId] = cancel
+	g.cancelChs[req.SubmissionId] = &SubmissionContext{
+		ctx: ctx, cancel: cancel,
+	}
 	g.mu.Unlock()
 	logger := zap.L().With(zap.Uint64("submissionId", req.GetSubmissionId()))
+	logger.Debug("Grader.GradeOneSubmission.Start")
+	defer logger.Debug("Grader.GradeOneSubmission.Exit")
 	go g.submissionReporter(req.SubmissionId, buffer)
 
 	// Download files
@@ -504,7 +664,6 @@ func (g *GraderWorker) WorkLoop() {
 			// Receive Grade Request
 			for {
 				request, err := hbCli.Recv()
-				logger.Debug("Grader.Recv")
 				if err != nil {
 					quit = true
 					logger.Error("Grader.Recv", zap.Error(err))
@@ -513,18 +672,33 @@ func (g *GraderWorker) WorkLoop() {
 				}
 				gradeReqs := request.GetRequests()
 				for _, req := range gradeReqs {
-					if req.IsCancel {
-						logger.Warn("Grader.CancelGrade", zap.Uint64("submissionId", req.GetSubmissionId()))
-						g.mu.Lock()
-						cancel := g.cancelChs[req.SubmissionId]
-						if cancel != nil {
-							cancel()
+					logger.Debug("Grader.Recv", zap.Stringer("request", req))
+					if req.IsStreamLog {
+						if req.IsCancel {
+							g.mu.Lock()
+							ctx := g.logStreams[req.SubmissionId][req.RequestId]
+							if ctx != nil {
+								ctx.cancel()
+							}
+							delete(g.logStreams[req.SubmissionId], req.RequestId)
+							g.mu.Unlock()
+						} else {
+							go g.streamLog(req.SubmissionId, req.RequestId)
 						}
-						delete(g.cancelChs, req.SubmissionId)
-						g.mu.Unlock()
 					} else {
-						logger.Debug("Grader.BeginGrade", zap.Uint64("submissionId", req.GetSubmissionId()))
-						go g.gradeOneSubmission(req)
+						if req.IsCancel {
+							logger.Warn("Grader.CancelGrade", zap.Uint64("submissionId", req.GetSubmissionId()))
+							g.mu.Lock()
+							ctx := g.cancelChs[req.SubmissionId]
+							if ctx != nil {
+								ctx.cancel()
+							}
+							delete(g.cancelChs, req.SubmissionId)
+							g.mu.Unlock()
+						} else {
+							logger.Debug("Grader.BeginGrade", zap.Uint64("submissionId", req.GetSubmissionId()))
+							go g.gradeOneSubmission(req)
+						}
 					}
 				}
 			}
@@ -553,14 +727,18 @@ func main() {
 	}
 	basePath := path.Join(cwd, "grader")
 	worker := &GraderWorker{
-		runningSubs: map[uint64]*grader_pb.GradeRequest{},
-		cancelChs:   map[uint64]context.CancelFunc{},
-		mu:          &sync.Mutex{},
-		basePath:    basePath,
-		hubAddress:  viper.GetString("hub.address"),
-		token:       viper.GetString("hub.token"),
-		ls:          storage.NewLocalStorage(basePath),
-		sfs:         storage.NewSimpleHTTPFS(viper.GetString("fs.http.url"), viper.GetString("fs.http.token")),
+		runningSubs:      map[uint64]*grader_pb.GradeRequest{},
+		cancelChs:        map[uint64]*SubmissionContext{},
+		mu:               &sync.Mutex{},
+		basePath:         basePath,
+		hubAddress:       viper.GetString("hub.address"),
+		token:            viper.GetString("hub.token"),
+		ls:               storage.NewLocalStorage(basePath),
+		sfs:              storage.NewSimpleHTTPFS(viper.GetString("fs.http.url"), viper.GetString("fs.http.token")),
+		containerIds:     map[uint64]string{},
+		logStreams:       map[uint64]map[string]*LogStreamContext{},
+		containerWaiters: map[string]map[string]chan bool{},
+		containerStarted: map[string]bool{},
 	}
 	worker.httpTimeout, err = time.ParseDuration(viper.GetString("fs.http.timeout"))
 	worker.rpcTimeout = 10 * time.Second

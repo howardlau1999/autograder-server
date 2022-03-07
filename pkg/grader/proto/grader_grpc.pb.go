@@ -29,6 +29,7 @@ type GraderHubServiceClient interface {
 	GetMetadata(ctx context.Context, in *GetMetadataRequest, opts ...grpc.CallOption) (*GetMetadataResponse, error)
 	PutMetadata(ctx context.Context, in *PutMetadataRequest, opts ...grpc.CallOption) (*PutMetadataResponse, error)
 	GetAllMetadata(ctx context.Context, in *GetAllMetadataRequest, opts ...grpc.CallOption) (*GetAllMetadataResponse, error)
+	StreamLogCallback(ctx context.Context, opts ...grpc.CallOption) (GraderHubService_StreamLogCallbackClient, error)
 }
 
 type graderHubServiceClient struct {
@@ -149,6 +150,40 @@ func (c *graderHubServiceClient) GetAllMetadata(ctx context.Context, in *GetAllM
 	return out, nil
 }
 
+func (c *graderHubServiceClient) StreamLogCallback(ctx context.Context, opts ...grpc.CallOption) (GraderHubService_StreamLogCallbackClient, error) {
+	stream, err := c.cc.NewStream(ctx, &GraderHubService_ServiceDesc.Streams[2], "/GraderHubService/StreamLogCallback", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &graderHubServiceStreamLogCallbackClient{stream}
+	return x, nil
+}
+
+type GraderHubService_StreamLogCallbackClient interface {
+	Send(*StreamLogResponse) error
+	CloseAndRecv() (*StreamLogCallbackResponse, error)
+	grpc.ClientStream
+}
+
+type graderHubServiceStreamLogCallbackClient struct {
+	grpc.ClientStream
+}
+
+func (x *graderHubServiceStreamLogCallbackClient) Send(m *StreamLogResponse) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *graderHubServiceStreamLogCallbackClient) CloseAndRecv() (*StreamLogCallbackResponse, error) {
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	m := new(StreamLogCallbackResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // GraderHubServiceServer is the server API for GraderHubService service.
 // All implementations must embed UnimplementedGraderHubServiceServer
 // for forward compatibility
@@ -160,6 +195,7 @@ type GraderHubServiceServer interface {
 	GetMetadata(context.Context, *GetMetadataRequest) (*GetMetadataResponse, error)
 	PutMetadata(context.Context, *PutMetadataRequest) (*PutMetadataResponse, error)
 	GetAllMetadata(context.Context, *GetAllMetadataRequest) (*GetAllMetadataResponse, error)
+	StreamLogCallback(GraderHubService_StreamLogCallbackServer) error
 	mustEmbedUnimplementedGraderHubServiceServer()
 }
 
@@ -187,6 +223,9 @@ func (UnimplementedGraderHubServiceServer) PutMetadata(context.Context, *PutMeta
 }
 func (UnimplementedGraderHubServiceServer) GetAllMetadata(context.Context, *GetAllMetadataRequest) (*GetAllMetadataResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetAllMetadata not implemented")
+}
+func (UnimplementedGraderHubServiceServer) StreamLogCallback(GraderHubService_StreamLogCallbackServer) error {
+	return status.Errorf(codes.Unimplemented, "method StreamLogCallback not implemented")
 }
 func (UnimplementedGraderHubServiceServer) mustEmbedUnimplementedGraderHubServiceServer() {}
 
@@ -343,6 +382,32 @@ func _GraderHubService_GetAllMetadata_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GraderHubService_StreamLogCallback_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(GraderHubServiceServer).StreamLogCallback(&graderHubServiceStreamLogCallbackServer{stream})
+}
+
+type GraderHubService_StreamLogCallbackServer interface {
+	SendAndClose(*StreamLogCallbackResponse) error
+	Recv() (*StreamLogResponse, error)
+	grpc.ServerStream
+}
+
+type graderHubServiceStreamLogCallbackServer struct {
+	grpc.ServerStream
+}
+
+func (x *graderHubServiceStreamLogCallbackServer) SendAndClose(m *StreamLogCallbackResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *graderHubServiceStreamLogCallbackServer) Recv() (*StreamLogResponse, error) {
+	m := new(StreamLogResponse)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // GraderHubService_ServiceDesc is the grpc.ServiceDesc for GraderHubService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -381,6 +446,11 @@ var GraderHubService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "GradeCallback",
 			Handler:       _GraderHubService_GradeCallback_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "StreamLogCallback",
+			Handler:       _GraderHubService_StreamLogCallback_Handler,
 			ClientStreams: true,
 		},
 	},
