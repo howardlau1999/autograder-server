@@ -232,7 +232,7 @@ func (g *GraderHubService) graderMonitor(graderId uint64, alive chan *time.Time)
 				logger.Warn("Grader.Monitor.Timeout")
 				grader.Status = model_pb.GraderStatusMetadata_Unknown
 				err = g.graderRepo.UpdateGrader(context.Background(), graderId, grader)
-				g.onGraderUnknown(graderId)
+				g.onGraderOffline(graderId)
 			} else if grader.Status == model_pb.GraderStatusMetadata_Unknown {
 				if t.After(grader.LastHeartbeat.AsTime().Add(30 * time.Second)) {
 					logger.Error("Grader.Monitor.Timeout.Offline")

@@ -70,16 +70,15 @@ const initialConfig = `
 	api-key = ""
 
 [hub]
-	port = 9999
-	token = ""
+	port=9999
+	token=""
 
 [web]
-	port = 9315
+	port=9315
 
-[fs]
-	[http]
-		port = 19999
-		token = ""
+[fs.http]
+	port=19999
+	token=""
 
 [hcaptcha]
     site-key=""

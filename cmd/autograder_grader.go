@@ -26,17 +26,17 @@ import (
 )
 
 const graderInitialConfig = `
+[grader]
+	concurrency = 5
+	tags = "docker,x64"
+
 [hub]
-	address = localhost:9999
+	address = "localhost:9999"
 	token = ""
 
-[web]
-	port = 9315
-
-[fs]
-	[http]
-		url = http://localhost:19999
-		token = ""
+[fs.http]
+	url = "http://localhost:19999"
+	token = ""
 `
 
 type GraderEnvKeyReplacer struct {
@@ -174,7 +174,8 @@ func (g *GraderWorker) sendReports(
 			continue
 		}
 		submissionStatus := report.GetBrief().GetStatus()
-		err := rpCli.Send(&grader_pb.GradeResponse{SubmissionId: submissionId, Report: report})
+		gradeResponse := &grader_pb.GradeResponse{SubmissionId: submissionId, Report: report}
+		err := rpCli.Send(gradeResponse)
 		if err != nil {
 			logger.Error("Grader.GradeCallback.Send", zap.Error(err))
 			goto Out
@@ -309,6 +310,7 @@ func (g *GraderWorker) gradeOneSubmission(
 						Status:        model_pb.SubmissionStatus_Failed,
 						InternalError: ErrCheckFileExists,
 					},
+					Report: &model_pb.SubmissionReport{InternalError: ErrCheckFileExists},
 				},
 			)
 			g.onSubmissionFinished(req.SubmissionId)
@@ -329,6 +331,7 @@ func (g *GraderWorker) gradeOneSubmission(
 							Status:        model_pb.SubmissionStatus_Failed,
 							InternalError: ErrDownloadFile,
 						},
+						Report: &model_pb.SubmissionReport{InternalError: ErrDownloadFile},
 					},
 				)
 				g.onSubmissionFinished(req.SubmissionId)
