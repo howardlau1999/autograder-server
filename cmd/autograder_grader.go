@@ -13,6 +13,7 @@ import (
 	grader_pb "autograder-server/pkg/grader/proto"
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/storage"
+	"github.com/avast/retry-go"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -27,16 +28,17 @@ import (
 
 const graderInitialConfig = `
 [grader]
-	concurrency = 5
-	tags = "docker,x64"
+	concurrency=5
+	tags="docker,x64"
 
 [hub]
-	address = "localhost:9999"
-	token = ""
+	address="localhost:9999"
+	token=""
 
 [fs.http]
-	url = "http://localhost:19999"
-	token = ""
+	url="http://localhost:19999"
+	token=""
+	timeout=""
 `
 
 type GraderEnvKeyReplacer struct {
@@ -59,6 +61,8 @@ type GraderWorker struct {
 	token        string
 	ls           *storage.LocalStorage
 	sfs          *storage.SimpleHTTPFS
+	httpTimeout  time.Duration
+	rpcTimeout   time.Duration
 }
 
 type ReportBuffer struct {
@@ -86,6 +90,7 @@ func graderReadConfig() {
 	viper.SetDefault("grader.concurrency", 5)
 	viper.SetDefault("grader.tags", "docker,x64")
 	viper.SetDefault("fs.http.url", "http://localhost:19999")
+	viper.SetDefault("fs.http.timeout", "1m")
 
 	err = viper.ReadInConfig()
 	if err != nil {
@@ -190,15 +195,26 @@ func (g *GraderWorker) sendReports(
 				wg.Add(1)
 				go func(outputPath string) {
 					logger.Debug("OutputFile.Upload", zap.String("outputPath", outputPath))
-					err := g.uploadFile(
-						context.Background(),
-						outputPath,
+					err := retry.Do(
+						func() error {
+							ctx, cancel := context.WithTimeout(context.Background(), g.httpTimeout)
+							defer cancel()
+							return g.uploadFile(
+								ctx,
+								outputPath,
+							)
+						}, retry.RetryIf(
+							func(err error) bool {
+								return os.IsTimeout(err)
+							},
+						),
+						retry.Attempts(3),
 					)
 					wg.Done()
 					if err != nil {
 						logger.Error("OutputFile.Upload", zap.String("outputPath", outputPath), zap.Error(err))
 					}
-
+					_ = g.ls.Delete(context.Background(), outputPath)
 				}(path.Join(fmt.Sprintf("runs/submissions/%d/results/outputs", submissionId), testcase.GetOutputPath()))
 			}
 			wg.Wait()
@@ -322,9 +338,21 @@ func (g *GraderWorker) gradeOneSubmission(
 		}
 		filesWg.Add(1)
 		go func(file string) {
-			err := g.downloadFile(ctx, file)
+			err := retry.Do(
+				func() error {
+					httpCtx, cancel := context.WithTimeout(ctx, g.httpTimeout)
+					defer cancel()
+					return g.downloadFile(httpCtx, file)
+				}, retry.RetryIf(
+					func(err error) bool {
+						return os.IsTimeout(err)
+					},
+				),
+				retry.Attempts(3),
+			)
 			logger.Debug("Grader.HTTPFS.Download", zap.String("file", file))
 			if err != nil {
+				logger.Error("Grader.HTTPFS.Download", zap.String("file", file), zap.Error(err))
 				buffer.Send(
 					&grader_pb.GradeReport{
 						Brief: &model_pb.SubmissionBriefReport{
@@ -534,5 +562,7 @@ func main() {
 		ls:          storage.NewLocalStorage(basePath),
 		sfs:         storage.NewSimpleHTTPFS(viper.GetString("fs.http.url"), viper.GetString("fs.http.token")),
 	}
+	worker.httpTimeout, err = time.ParseDuration(viper.GetString("fs.http.timeout"))
+	worker.rpcTimeout = 10 * time.Second
 	worker.WorkLoop()
 }
