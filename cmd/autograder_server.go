@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"html/template"
-	"io"
 	"io/fs"
 	"log"
 	"math/rand"
@@ -46,7 +45,6 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/grpclog"
 )
 
 var (
@@ -65,6 +63,23 @@ const initialConfig = `
     user=""
     pass=""
     from=""
+
+[mailgun]
+	enabled = false
+	domain = ""
+	api-key = ""
+
+[hub]
+	port = 9999
+	token = ""
+
+[web]
+	port = 9315
+
+[fs]
+	[http]
+		port = 19999
+		token = ""
 
 [hcaptcha]
     site-key=""
@@ -127,7 +142,9 @@ func serverReadConfig() {
 	viper.AddConfigPath(".")
 	viper.AutomaticEnv()
 
-	viper.SetDefault("grader.concurrency", 5)
+	viper.SetDefault("hub.port", "9999")
+	viper.SetDefault("fs.http.port", "19999")
+	viper.SetDefault("web.port", "9315")
 
 	err := viper.ReadInConfig()
 	if err != nil {
@@ -148,11 +165,9 @@ func main() {
 	var isInit bool
 	var initEmail string
 	var err error
-	var port int
 	var printUsage bool
 	pflag.BoolVar(&isInit, "init", false, "Pass this flag to initialize database.")
 	pflag.StringVar(&initEmail, "email", "", "The email for the initialized root user.")
-	pflag.IntVar(&port, "port", 4200, "The port to listen on.")
 	pflag.BoolVar(&printUsage, "help", false, "Print this message.")
 	pflag.Parse()
 	if printUsage {
@@ -197,7 +212,15 @@ func main() {
 		zap.L().Fatal("OS.Getwd", zap.Error(err))
 	}
 	ls := storage.NewLocalStorage(cwd)
-	m := mailer.NewSMTPMailer(viper.GetString("smtp.addr"), viper.GetString("smtp.user"), viper.GetString("smtp.pass"))
+	var m mailer.Mailer
+	if viper.GetBool("mailgun.enabled") {
+		m = mailer.NewMailgunMailer(viper.GetString("mailgun.domain"), viper.GetString("mailgun.api-key"))
+	} else {
+		m = mailer.NewSMTPMailer(
+			viper.GetString("smtp.addr"), viper.GetString("smtp.user"), viper.GetString("smtp.pass"),
+		)
+	}
+
 	distFS, err := fs.Sub(web.WebResources, "dist")
 	if err != nil {
 		panic(err)
@@ -264,7 +287,7 @@ func main() {
 		),
 	)
 	srr := repository.NewKVSubmissionReportRepository(db)
-	graderHubService := grader_grpc.NewGraderHubService(db, srr)
+	graderHubService := grader_grpc.NewGraderHubService(db, srr, viper.GetString("hub.token"))
 	autograderService := autograder_grpc.NewAutograderServiceServer(
 		db, ls, m, hcaptchaClient, githubOauth2Config, srr, graderHubService,
 	)
@@ -315,11 +338,10 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		indexHTMLString := rendered.String()
-		indexHTML := strings.NewReader(indexHTMLString)
+		indexHTML := rendered.Bytes()
 		writeTemplate = func(w http.ResponseWriter, r *http.Request) {
-			indexHTML.Reset(indexHTMLString)
-			_, _ = io.Copy(w, indexHTML)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(indexHTML)
 		}
 	}
 	fsrv := http.FileServer(http.FS(distFS))
@@ -344,7 +366,11 @@ func main() {
 			},
 		),
 	)
-	graderHubLis, err := net.Listen("tcp", ":9999")
+
+	// Communicate with graders
+	graderHubPort := viper.GetInt("hub.port")
+	zap.L().Info("GraderHub.Listen", zap.Int("port", graderHubPort))
+	graderHubLis, err := net.Listen("tcp", fmt.Sprintf(":%d", graderHubPort))
 	if err != nil {
 		zap.L().Fatal("Server.Grader.Listen", zap.Error(err))
 	}
@@ -356,18 +382,30 @@ func main() {
 	}()
 
 	// Simple File Server for graders
+	httpFSPort := viper.GetInt("fs.http.port")
+	zap.L().Info("HTTPFS.Listen", zap.Int("port", httpFSPort))
 	fileSrvRouter := chi.NewRouter()
-	fileSrvRouter.Post("/*", autograderService.PushFile)
-	fileSrvRouter.Get("/*", http.FileServer(http.Dir(".")).ServeHTTP)
+	verifyHTTPFSToken := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			token := r.Header.Get("token")
+			if token != viper.GetString("fs.http.token") {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+		}
+	}
+	fileSrvRouter.Post("/*", verifyHTTPFSToken(autograderService.PushFile))
+	fileSrvRouter.Get("/*", verifyHTTPFSToken(http.FileServer(http.Dir(".")).ServeHTTP))
 	go func() {
-		zap.L().Info("HTTPFS.Listen", zap.Int("port", 19999))
-		if err := http.ListenAndServe(":19999", fileSrvRouter); err != nil {
-			zap.L().Fatal("Server.File.Serve", zap.Error(err))
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", httpFSPort), fileSrvRouter); err != nil {
+			zap.L().Fatal("HTTPFS.Serve", zap.Error(err))
 		}
 	}()
 
-	grpclog.Infof("Server listening on port %d. Open http://localhost:%d", port, port)
+	port := viper.GetInt("web.port")
+	zap.L().Info("Web.Listen", zap.Int("port", port))
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), router); err != nil {
-		zap.L().Fatal("Server.HTTP.Listen", zap.Error(err))
+		zap.L().Fatal("Web.Serve", zap.Error(err))
 	}
 }

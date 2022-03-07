@@ -11,6 +11,7 @@ import (
 
 type SimpleHTTPFS struct {
 	baseURL *url.URL
+	token   string
 }
 
 func (sfs *SimpleHTTPFS) Put(ctx context.Context, path string, body io.Reader) error {
@@ -22,6 +23,7 @@ func (sfs *SimpleHTTPFS) Put(ctx context.Context, path string, body io.Reader) e
 	if err != nil {
 		return err
 	}
+	req.Header.Set("token", sfs.token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -39,6 +41,7 @@ func (sfs *SimpleHTTPFS) Get(ctx context.Context, path string) (io.ReadCloser, e
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("token", sfs.token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -46,10 +49,10 @@ func (sfs *SimpleHTTPFS) Get(ctx context.Context, path string) (io.ReadCloser, e
 	return resp.Body, nil
 }
 
-func NewSimpleHTTPFS(baseURL string) *SimpleHTTPFS {
+func NewSimpleHTTPFS(baseURL string, token string) *SimpleHTTPFS {
 	base, err := url.Parse(baseURL)
 	if err != nil {
-		zap.L().Panic("Client.HTTPFS.New", zap.Error(err))
+		zap.L().Fatal("Client.HTTPFS.New", zap.Error(err))
 	}
-	return &SimpleHTTPFS{baseURL: base}
+	return &SimpleHTTPFS{baseURL: base, token: token}
 }

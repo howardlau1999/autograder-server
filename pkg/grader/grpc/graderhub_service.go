@@ -14,7 +14,6 @@ import (
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/repository"
 	"github.com/cockroachdb/pebble"
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -50,6 +49,7 @@ func NewGradeRequestQueue() *GradeRequestQueue {
 
 type GraderHubService struct {
 	grader_pb.UnimplementedGraderHubServiceServer
+	token                string
 	graderRepo           repository.GraderRepository
 	submissionReportRepo repository.SubmissionReportRepository
 	gradeRequestMu       *sync.Mutex
@@ -345,7 +345,7 @@ func (g *GraderHubService) GetAllMetadata(
 func (g *GraderHubService) RegisterGrader(
 	ctx context.Context, request *grader_pb.RegisterGraderRequest,
 ) (*grader_pb.RegisterGraderResponse, error) {
-	if request.GetToken() != viper.GetString("grader.token") {
+	if request.GetToken() != g.token {
 		return nil, status.Error(codes.PermissionDenied, "INVALID_TOKEN")
 	}
 	p, ok := peer.FromContext(ctx)
@@ -405,15 +405,13 @@ func (g *GraderHubService) onPendingRankChanged(submissionId uint64, newRank int
 func (g *GraderHubService) scheduler() {
 	zap.L().Debug("GraderHub.Scheduler.Start")
 	defer zap.L().Debug("GraderHub.Scheduler.Exit")
+	var cur *list.Element
 	for {
 		g.queuedMu.Lock()
-		var cur *list.Element
-		for {
-			cur = g.queuedList.Front()
-			if cur != nil {
-				break
-			}
+		cur = g.queuedList.Front()
+		if cur == nil {
 			g.schedulerCond.Wait()
+			cur = g.queuedList.Front()
 		}
 		for cur != nil {
 			// Try schedule one request
@@ -448,6 +446,8 @@ func (g *GraderHubService) scheduler() {
 			}
 			cur = cur.Next()
 		}
+		// Requests are scheduled, wait for next event
+		g.schedulerCond.Wait()
 		g.queuedMu.Unlock()
 	}
 }
@@ -716,7 +716,7 @@ func (g *GraderHubService) CancelGrade(
 	return nil
 }
 
-func NewGraderHubService(db *pebble.DB, srr repository.SubmissionReportRepository) *GraderHubService {
+func NewGraderHubService(db *pebble.DB, srr repository.SubmissionReportRepository, token string) *GraderHubService {
 	gr := repository.NewKVGraderRepository(db)
 	svc := &GraderHubService{
 		graderRepo:           gr,
@@ -734,6 +734,7 @@ func NewGraderHubService(db *pebble.DB, srr repository.SubmissionReportRepositor
 		submissionSubs:       map[uint64][]chan *grader_pb.GradeReport{},
 		gradeRequestQueues:   map[uint64]*GradeRequestQueue{},
 		monitorChs:           map[uint64]chan *time.Time{},
+		token:                token,
 	}
 	svc.schedulerCond = sync.NewCond(svc.queuedMu)
 	ids, graders, err := gr.GetAllGraders(context.Background())

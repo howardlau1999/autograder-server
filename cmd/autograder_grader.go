@@ -13,6 +13,7 @@ import (
 	grader_pb "autograder-server/pkg/grader/proto"
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/storage"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -23,6 +24,20 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+const graderInitialConfig = `
+[hub]
+	address = localhost:9999
+	token = ""
+
+[web]
+	port = 9315
+
+[fs]
+	[http]
+		url = http://localhost:19999
+		token = ""
+`
 
 type GraderEnvKeyReplacer struct {
 }
@@ -40,6 +55,8 @@ type GraderWorker struct {
 	dockerGrader *grader.DockerProgrammingGrader
 	graderId     uint64
 	basePath     string
+	hubAddress   string
+	token        string
 	ls           *storage.LocalStorage
 	sfs          *storage.SimpleHTTPFS
 }
@@ -68,6 +85,7 @@ func graderReadConfig() {
 	viper.SetDefault("grader.hostname", hostname)
 	viper.SetDefault("grader.concurrency", 5)
 	viper.SetDefault("grader.tags", "docker,x64")
+	viper.SetDefault("fs.http.url", "http://localhost:19999")
 
 	err = viper.ReadInConfig()
 	if err != nil {
@@ -354,15 +372,15 @@ func (g *GraderWorker) gradeOneSubmission(
 
 func (g *GraderWorker) WorkLoop() {
 	var graderId uint64
-	conn, err := grpc.Dial(viper.GetString("hub.address"), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(g.hubAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		panic(err)
+		zap.L().Fatal("Hub.Dial", zap.Error(err))
 	}
 	client := grader_pb.NewGraderHubServiceClient(conn)
 	concurrency := uint64(viper.GetUint("grader.concurrency"))
 	g.dockerGrader = grader.NewDockerProgrammingGrader(int(concurrency))
 	registerRequest := &grader_pb.RegisterGraderRequest{
-		Token: viper.GetString("grader.token"),
+		Token: g.token,
 		Info: &model_pb.GraderInfo{
 			Hostname:    viper.GetString("grader.hostname"),
 			Tags:        strings.Split(viper.GetString("grader.tags"), ","),
@@ -375,7 +393,7 @@ func (g *GraderWorker) WorkLoop() {
 		resp, err := client.RegisterGrader(context.Background(), registerRequest)
 		if err != nil {
 			if status.Code(err) == codes.AlreadyExists {
-				zap.L().Error("Grader.Register.NameAlreadyExists", zap.Error(err))
+				zap.L().Fatal("Grader.Register.NameAlreadyExists", zap.Error(err))
 				return
 			}
 			zap.L().Error("Grader.Register", zap.Error(err))
@@ -488,6 +506,13 @@ func (g *GraderWorker) WorkLoop() {
 }
 
 func main() {
+	var printTemplate bool
+	pflag.BoolVar(&printTemplate, "config", false, "Pass this flag to print config template.")
+	pflag.Parse()
+	if printTemplate {
+		fmt.Print(graderInitialConfig)
+		return
+	}
 	l, _ := zap.NewDevelopment()
 	zap.ReplaceGlobals(l)
 	graderReadConfig()
@@ -501,8 +526,10 @@ func main() {
 		cancelChs:   map[uint64]context.CancelFunc{},
 		mu:          &sync.Mutex{},
 		basePath:    basePath,
+		hubAddress:  viper.GetString("hub.address"),
+		token:       viper.GetString("hub.token"),
 		ls:          storage.NewLocalStorage(basePath),
-		sfs:         storage.NewSimpleHTTPFS("http://localhost:19999"),
+		sfs:         storage.NewSimpleHTTPFS(viper.GetString("fs.http.url"), viper.GetString("fs.http.token")),
 	}
 	worker.WorkLoop()
 }
