@@ -84,8 +84,7 @@ message DockerGraderMetadata {
 }
 
 message StreamLogResponse {
-  string reqeust_id = 1;
-  bytes data = 2;
+  bytes data = 1;
 }
 
 message StreamLogCallbackResponse {
