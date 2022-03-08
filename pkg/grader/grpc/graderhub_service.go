@@ -512,17 +512,9 @@ func (g *GraderHubService) graderRequestSendLoop(
 		copy(requests, queue.requests)
 		queue.requests = nil
 		queue.mu.Unlock()
-		var i int
-		for i = 0; i < len(requests); i++ {
-			r := requests[i]
-			err = server.Send(&grader_pb.GraderHeartbeatResponse{Requests: []*grader_pb.GradeRequest{r}})
-			if err != nil {
-				logger.Error("GraderHeartbeat.Send", zap.Error(err))
-				break
-			}
-			logger.Debug("GraderHeartbeat.SendGradeRequest", zap.Stringer("request", r))
-		}
+		err = server.Send(&grader_pb.GraderHeartbeatResponse{Requests: requests})
 		if err != nil {
+			logger.Error("GraderHeartbeat.Send", zap.Error(err))
 			break
 		}
 	}
