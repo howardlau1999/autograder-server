@@ -68,7 +68,6 @@ type GraderWorker struct {
 	containerIds     map[uint64]string
 	logStreams       map[uint64]map[string]*LogStreamContext
 	mu               *sync.Mutex
-	client           grader_pb.GraderHubServiceClient
 	dockerGrader     *grader.DockerProgrammingGrader
 	graderId         uint64
 	basePath         string
@@ -166,6 +165,7 @@ func (g *GraderWorker) getMetadataKey(submissionId uint64) []byte {
 
 func (g *GraderWorker) sendReports(
 	rpCli grader_pb.GraderHubService_GradeCallbackClient,
+	client grader_pb.GraderHubServiceClient,
 	submissionId uint64, reports *[]*grader_pb.GradeReport,
 	logger *zap.Logger,
 ) error {
@@ -195,7 +195,7 @@ func (g *GraderWorker) sendReports(
 				logger.Error("Grader.MarshalMetadata", zap.Error(err))
 				continue
 			}
-			_, err = g.client.PutMetadata(
+			_, err = client.PutMetadata(
 				context.Background(), &grader_pb.PutMetadataRequest{
 					Key:      g.getMetadataKey(submissionId),
 					Value:    value,
@@ -255,7 +255,7 @@ func (g *GraderWorker) sendReports(
 		if submissionStatus == model_pb.SubmissionStatus_Finished ||
 			submissionStatus == model_pb.SubmissionStatus_Cancelled ||
 			submissionStatus == model_pb.SubmissionStatus_Failed {
-			_, err := g.client.PutMetadata(
+			_, err := client.PutMetadata(
 				context.Background(),
 				&grader_pb.PutMetadataRequest{GraderId: g.graderId, Key: g.getMetadataKey(submissionId)},
 			)
@@ -283,8 +283,10 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			logger.Error("Grader.FS.Remove", zap.String("file", runPath), zap.Error(err))
 		}
 	}(fmt.Sprintf("runs/submissions/%d", submissionId))
+	conn, client := g.getNewClient()
+	defer conn.Close()
 	for !buffer.closed || len(reports) > 0 {
-		rpCli, err := g.client.GradeCallback(context.Background())
+		rpCli, err := client.GradeCallback(context.Background())
 		if err != nil {
 			logger.Error("Grader.StartGradeCallback", zap.Error(err))
 			if buffer.closed {
@@ -293,7 +295,7 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		err = g.sendReports(rpCli, submissionId, &reports, logger)
+		err = g.sendReports(rpCli, client, submissionId, &reports, logger)
 		if err != nil {
 			time.Sleep(1 * time.Second)
 			err := rpCli.CloseSend()
@@ -318,7 +320,7 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			reports = append(reports, buffer.buffer...)
 			buffer.buffer = nil
 			buffer.mu.Unlock()
-			err = g.sendReports(rpCli, submissionId, &reports, logger)
+			err = g.sendReports(rpCli, client, submissionId, &reports, logger)
 			if err != nil {
 				err := rpCli.CloseSend()
 				if err != nil {
@@ -382,7 +384,9 @@ func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
 	}
 	g.logStreams[submissionId][requestId] = &LogStreamContext{ctx: ctx, cancel: cancel}
 	g.mu.Unlock()
-	slCli, err := g.client.StreamLogCallback(ctx)
+	conn, client := g.getNewClient()
+	defer conn.Close()
+	slCli, err := client.StreamLogCallback(ctx)
 	if err != nil {
 		logger.Error("StreamLog.Callback", zap.Error(err))
 		return
@@ -561,13 +565,18 @@ func (g *GraderWorker) gradeOneSubmission(
 	buffer.Close()
 }
 
-func (g *GraderWorker) WorkLoop() {
-	var graderId uint64
+func (g *GraderWorker) getNewClient() (*grpc.ClientConn, grader_pb.GraderHubServiceClient) {
 	conn, err := grpc.Dial(g.hubAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		zap.L().Fatal("Hub.Dial", zap.Error(err))
+		zap.L().Error("Hub.Dial", zap.Error(err))
+		return nil, nil
 	}
 	client := grader_pb.NewGraderHubServiceClient(conn)
+	return conn, client
+}
+
+func (g *GraderWorker) WorkLoop() {
+	var graderId uint64
 	concurrency := uint64(viper.GetUint("grader.concurrency"))
 	g.dockerGrader = grader.NewDockerProgrammingGrader(int(concurrency))
 	registerRequest := &grader_pb.RegisterGraderRequest{
@@ -579,7 +588,8 @@ func (g *GraderWorker) WorkLoop() {
 		},
 	}
 	zap.L().Info("Grader.RegisterRequest", zap.Stringer("request", registerRequest))
-	g.client = client
+	conn, client := g.getNewClient()
+	defer conn.Close()
 	for {
 		resp, err := client.RegisterGrader(context.Background(), registerRequest)
 		if err != nil {
@@ -623,7 +633,7 @@ func (g *GraderWorker) WorkLoop() {
 				defer cancel()
 				// TODO check error
 				_ = g.dockerGrader.RemoveContainer(ctx, l, containerId)
-				_, _ = g.client.PutMetadata(ctx, &grader_pb.PutMetadataRequest{GraderId: graderId, Key: metadataKey})
+				_, _ = client.PutMetadata(ctx, &grader_pb.PutMetadataRequest{GraderId: graderId, Key: metadataKey})
 				wg.Done()
 			}(l, metadataPB.ContainerId, key)
 		}
