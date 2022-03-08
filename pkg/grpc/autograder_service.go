@@ -1808,11 +1808,19 @@ func (a *AutograderService) InspectUserSubmissionHistory(
 	return &autograder_pb.InspectUserSubmissionHistoryResponse{Submissions: submissions}, nil
 }
 
+func (a *AutograderService) regradeSubmission(submissionId uint64, assignmentId uint64) {
+	b, _ := a.submissionReportRepo.GetSubmissionBriefReport(context.Background(), submissionId)
+	if b != nil && (b.GetStatus() == model_pb.SubmissionStatus_Queued || b.GetStatus() == model_pb.SubmissionStatus_Running) {
+		_ = a.graderHubSvc.CancelGrade(context.Background(), submissionId)
+	}
+	a.runSubmission(context.Background(), submissionId, assignmentId)
+}
+
 func (a *AutograderService) RegradeSubmission(
 	ctx context.Context, request *autograder_pb.RegradeSubmissionRequest,
 ) (*autograder_pb.RegradeSubmissionResponse, error) {
 	assignmentId := ctx.Value(submissionCtxKey{}).(*model_pb.Submission).AssignmentId
-	go a.runSubmission(context.Background(), request.SubmissionId, assignmentId)
+	go a.regradeSubmission(request.SubmissionId, assignmentId)
 	return &autograder_pb.RegradeSubmissionResponse{}, nil
 }
 
@@ -1836,7 +1844,7 @@ func (a *AutograderService) RegradeAssignment(
 		submissionIds = append(submissionIds, userSubmissions...)
 	}
 	for _, submissionId := range submissionIds {
-		go a.runSubmission(context.Background(), submissionId, request.GetAssignmentId())
+		go a.regradeSubmission(submissionId, request.GetAssignmentId())
 	}
 	return &autograder_pb.RegradeAssignmentResponse{}, nil
 }
