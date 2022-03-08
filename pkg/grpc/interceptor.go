@@ -3,6 +3,9 @@ package grpc
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"runtime"
+	"strings"
 	"time"
 
 	autograder_pb "autograder-server/pkg/api/proto"
@@ -235,112 +238,119 @@ func (a *AutograderService) NotAfterDueDate(ctx context.Context, req interface{}
 	return ctx, nil
 }
 
+func getFunctionName(f interface{}) string {
+	name := runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name()
+	parts := strings.Split(name, ".")
+	name = parts[len(parts)-1]
+	return name
+}
+
 func (a *AutograderService) initAuthFuncs() {
 	a.authFuncs = map[string][]MethodAuthFunc{}
 	authMaps := []struct {
-		Methods   []string
+		Methods   []interface{}
 		AuthFuncs []MethodAuthFunc
 	}{
 		{
-			Methods: []string{
-				"Login",
-				"SignUp",
-				"ResetPassword",
-				"GithubLogin",
+			Methods: []interface{}{
+				(*AutograderService).Login,
+				(*AutograderService).SignUp,
+				(*AutograderService).ResetPassword,
+				(*AutograderService).GithubLogin,
 			},
 			AuthFuncs: []MethodAuthFunc{a.NoopAuth},
 		},
 		{
-			Methods: []string{
-				"RequestPasswordReset",
-				"RequestSignUpToken",
+			Methods: []interface{}{
+				(*AutograderService).RequestPasswordReset,
+				(*AutograderService).RequestSignUpToken,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireCaptcha},
 		},
 		{
-			Methods: []string{
-				"GetCourseList",
-				"GetUser",
-				"UpdateBasicInfo",
-				"BindGithub",
-				"UnbindGithub",
-				"UpdateUser",
-				"UpdatePassword",
-				"JoinCourse",
+			Methods: []interface{}{
+				(*AutograderService).GetCourseList,
+				(*AutograderService).GetUser,
+				(*AutograderService).BindGithub,
+				(*AutograderService).UnbindGithub,
+				(*AutograderService).UpdateUser,
+				(*AutograderService).UpdatePassword,
+				(*AutograderService).JoinCourse,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin},
 		},
 		{
-			Methods: []string{
-				"InitUpload",
-				"DeleteFileInManifest",
+			Methods: []interface{}{
+				(*AutograderService).InitUpload,
+				(*AutograderService).DeleteFileInManifest,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.CheckManifest},
 		},
 		{
-			Methods: []string{
-				"GetAllGraders",
-				"SearchUser",
-				"SetAdmin",
-				"CreateCourse",
-				"GetAllUsers",
+			Methods: []interface{}{
+				(*AutograderService).GetAllGraders,
+				(*AutograderService).SearchUser,
+				(*AutograderService).SetAdmin,
+				(*AutograderService).CreateCourse,
+				(*AutograderService).GetAllUsers,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.RequireAdmin},
 		},
 		{
-			Methods: []string{
-				"GetAssignment",
-				"GetAssignmentsInCourse",
-				"GetSubmissionsInAssignment",
-				"GetLeaderboard",
-				"HasLeaderboard",
-				"GetCourse",
+			Methods: []interface{}{
+				(*AutograderService).GetAssignment,
+				(*AutograderService).GetAssignmentsInCourse,
+				(*AutograderService).GetSubmissionsInAssignment,
+				(*AutograderService).GetLeaderboard,
+				(*AutograderService).HasLeaderboard,
+				(*AutograderService).GetCourse,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse},
 		},
 		{
-			Methods: []string{
-				"CreateSubmission",
-				"CreateManifest",
+			Methods: []interface{}{
+				(*AutograderService).CreateSubmission,
+				(*AutograderService).CreateManifest,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.NotAfterDueDate},
 		},
 		{
 
-			Methods: []string{
-				"CreateAssignment",
-				"GetCourseMembers",
-				"RemoveCourseMembers",
-				"AddCourseMembers",
-				"UpdateCourse",
-				"UpdateAssignment",
-				"UpdateCourseMember",
-				"CanWriteCourse",
-				"GenerateJoinCode",
-				"ChangeAllowsJoinCourse",
-				"InspectAllSubmissionsInAssignment",
-				"InspectUserSubmissionHistory",
-				"RegradeSubmission",
-				"RegradeAssignment",
-				"ChangeLeaderboardAnonymous",
-				"ExportAssignmentGrades",
-				"DeleteLeaderboard",
+			Methods: []interface{}{
+				(*AutograderService).CreateAssignment,
+				(*AutograderService).GetCourseMembers,
+				(*AutograderService).RemoveCourseMembers,
+				(*AutograderService).AddCourseMembers,
+				(*AutograderService).UpdateCourse,
+				(*AutograderService).UpdateAssignment,
+				(*AutograderService).UpdateCourseMember,
+				(*AutograderService).CanWriteCourse,
+				(*AutograderService).GenerateJoinCode,
+				(*AutograderService).ChangeAllowsJoinCourse,
+				(*AutograderService).InspectAllSubmissionsInAssignment,
+				(*AutograderService).InspectUserSubmissionHistory,
+				(*AutograderService).RegradeSubmission,
+				(*AutograderService).RegradeAssignment,
+				(*AutograderService).ChangeLeaderboardAnonymous,
+				(*AutograderService).ExportAssignmentGrades,
+				(*AutograderService).DeleteLeaderboard,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireCourseWrite},
 		},
 		{
-			Methods: []string{
-				"InitDownload",
-				"GetFilesInSubmission",
-				"GetSubmissionReport",
-				"SubscribeSubmission",
-				"CancelSubmission",
+			Methods: []interface{}{
+				(*AutograderService).InitDownload,
+				(*AutograderService).GetFilesInSubmission,
+				(*AutograderService).GetSubmissionReport,
+				(*AutograderService).SubscribeSubmission,
+				(*AutograderService).CancelSubmission,
+				(*AutograderService).StreamLog,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireSubmissionRead},
 		},
 		{
-			Methods: []string{
-				"ActivateSubmission",
+			Methods: []interface{}{
+				(*AutograderService).ActivateSubmission,
 			},
 			AuthFuncs: []MethodAuthFunc{
 				a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireSubmissionRead, a.NotAfterDueDate,
@@ -350,7 +360,7 @@ func (a *AutograderService) initAuthFuncs() {
 
 	for _, authMap := range authMaps {
 		for _, method := range authMap.Methods {
-			a.authFuncs[getFullName(method)] = authMap.AuthFuncs
+			a.authFuncs[getFullName(getFunctionName(method))] = authMap.AuthFuncs
 		}
 	}
 }

@@ -1995,7 +1995,10 @@ func (a *AutograderService) StreamLog(
 	request *autograder_pb.WebStreamLogRequest,
 	server autograder_pb.AutograderService_StreamLogServer,
 ) error {
-	ctx := server.Context()
+	ctx, err := a.AuthFunc(server.Context(), request, "/AutograderService/StreamLog")
+	if err != nil {
+		return err
+	}
 	ch, err := a.graderHubSvc.StreamLog(ctx, request.GetSubmissionId())
 	if err != nil {
 		return status.Error(codes.Internal, "STREAM_LOG")
