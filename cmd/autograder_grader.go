@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -774,13 +775,11 @@ func main() {
 		l.Fatal("Grader.HeartbeatInterval.Invalid", zap.Error(err))
 	}
 	basePath := viper.GetString("fs.local.dir")
-	if basePath == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			zap.L().Fatal("OS.Getwd", zap.Error(err))
-		}
-		basePath = cwd
+	cwd, err := os.Getwd()
+	if err != nil {
+		zap.L().Fatal("OS.Getwd", zap.Error(err))
 	}
+	basePath = filepath.Join(cwd, basePath)
 	worker := &GraderWorker{
 		runningSubs:       map[uint64]*grader_pb.GradeRequest{},
 		cancelChs:         map[uint64]*SubmissionContext{},
