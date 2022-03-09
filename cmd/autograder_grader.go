@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"strconv"
@@ -17,6 +18,9 @@ import (
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/storage"
 	"github.com/avast/retry-go"
+	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -33,15 +37,24 @@ const graderInitialConfig = `
 [grader]
 	concurrency=5
 	tags="docker,x64"
+	heartbeat-interval="10s"
 
 [hub]
 	address="localhost:9999"
 	token=""
 
+[fs.local]
+	dir="grader"
+
 [fs.http]
 	url="http://localhost:19999"
 	token=""
-	timeout=""
+	timeout="10s"
+
+[metrics]
+	enabled=true
+	port=39999
+	path="/metrics"
 `
 
 type GraderEnvKeyReplacer struct {
@@ -63,22 +76,23 @@ type LogStreamContext struct {
 }
 
 type GraderWorker struct {
-	runningSubs      map[uint64]*grader_pb.GradeRequest
-	cancelChs        map[uint64]*SubmissionContext
-	containerIds     map[uint64]string
-	logStreams       map[uint64]map[string]*LogStreamContext
-	mu               *sync.Mutex
-	dockerGrader     *grader.DockerProgrammingGrader
-	graderId         uint64
-	basePath         string
-	hubAddress       string
-	token            string
-	ls               *storage.LocalStorage
-	sfs              *storage.SimpleHTTPFS
-	httpTimeout      time.Duration
-	rpcTimeout       time.Duration
-	containerWaiters map[string]map[string]chan bool
-	containerStarted map[string]bool
+	runningSubs       map[uint64]*grader_pb.GradeRequest
+	cancelChs         map[uint64]*SubmissionContext
+	containerIds      map[uint64]string
+	logStreams        map[uint64]map[string]*LogStreamContext
+	mu                *sync.Mutex
+	dockerGrader      *grader.DockerProgrammingGrader
+	graderId          uint64
+	basePath          string
+	hubAddress        string
+	token             string
+	ls                *storage.LocalStorage
+	sfs               *storage.SimpleHTTPFS
+	heartbeatInterval time.Duration
+	httpTimeout       time.Duration
+	rpcTimeout        time.Duration
+	containerWaiters  map[string]map[string]chan bool
+	containerStarted  map[string]bool
 }
 
 type ReportBuffer struct {
@@ -104,9 +118,14 @@ func graderReadConfig() {
 	}
 	viper.SetDefault("grader.hostname", hostname)
 	viper.SetDefault("grader.concurrency", 5)
+	viper.SetDefault("grader.heartbeat-interval", "10s")
 	viper.SetDefault("grader.tags", "docker,x64")
 	viper.SetDefault("fs.http.url", "http://localhost:19999")
 	viper.SetDefault("fs.http.timeout", "1m")
+	viper.SetDefault("fs.local.dir", "grader")
+	viper.SetDefault("metrics.port", "39999")
+	viper.SetDefault("metrics.enabled", true)
+	viper.SetDefault("metrics.path", "/metrics")
 
 	err = viper.ReadInConfig()
 	if err != nil {
@@ -566,7 +585,18 @@ func (g *GraderWorker) gradeOneSubmission(
 }
 
 func (g *GraderWorker) getNewClient() (*grpc.ClientConn, grader_pb.GraderHubServiceClient) {
-	conn, err := grpc.Dial(g.hubAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(
+		g.hubAddress,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(
+			grpc_opentracing.UnaryClientInterceptor(),
+			grpc_prometheus.UnaryClientInterceptor,
+		),
+		grpc.WithChainStreamInterceptor(
+			grpc_opentracing.StreamClientInterceptor(),
+			grpc_prometheus.StreamClientInterceptor,
+		),
+	)
 	if err != nil {
 		zap.L().Error("Hub.Dial", zap.Error(err))
 		return nil, nil
@@ -651,7 +681,7 @@ func (g *GraderWorker) WorkLoop() {
 			// Heartbeat
 			go func() {
 				logger.Debug("Grader.StartHeartbeat")
-				timer := time.NewTimer(10 * time.Second)
+				timer := time.NewTimer(g.heartbeatInterval)
 				for {
 					logger.Debug("Grader.Heartbeat")
 					err := hbCli.Send(&grader_pb.GraderHeartbeatRequest{Time: timestamppb.Now(), GraderId: graderId})
@@ -663,7 +693,7 @@ func (g *GraderWorker) WorkLoop() {
 					}
 					select {
 					case <-timer.C:
-						timer.Reset(10 * time.Second)
+						timer.Reset(g.heartbeatInterval)
 					case <-hbCtx.Done():
 						timer.Stop()
 						return
@@ -720,37 +750,69 @@ func (g *GraderWorker) WorkLoop() {
 	}
 }
 
-func main() {
+func graderProcessCommandLineOptions() bool {
+
 	var printTemplate bool
 	pflag.BoolVar(&printTemplate, "config", false, "Pass this flag to print config template.")
 	pflag.Parse()
 	if printTemplate {
 		fmt.Print(graderInitialConfig)
+		return true
+	}
+	return false
+}
+
+func main() {
+	if graderProcessCommandLineOptions() {
 		return
 	}
 	l, _ := zap.NewDevelopment()
 	zap.ReplaceGlobals(l)
 	graderReadConfig()
-	cwd, err := os.Getwd()
+	heartbeatInterval, err := time.ParseDuration(viper.GetString("grader.heartbeat-interval"))
 	if err != nil {
-		zap.L().Fatal("OS.Getwd", zap.Error(err))
+		l.Fatal("Grader.HeartbeatInterval.Invalid", zap.Error(err))
 	}
-	basePath := path.Join(cwd, "grader")
+	basePath := viper.GetString("fs.local.dir")
+	if basePath == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			zap.L().Fatal("OS.Getwd", zap.Error(err))
+		}
+		basePath = cwd
+	}
 	worker := &GraderWorker{
-		runningSubs:      map[uint64]*grader_pb.GradeRequest{},
-		cancelChs:        map[uint64]*SubmissionContext{},
-		mu:               &sync.Mutex{},
-		basePath:         basePath,
-		hubAddress:       viper.GetString("hub.address"),
-		token:            viper.GetString("hub.token"),
-		ls:               storage.NewLocalStorage(basePath),
-		sfs:              storage.NewSimpleHTTPFS(viper.GetString("fs.http.url"), viper.GetString("fs.http.token")),
-		containerIds:     map[uint64]string{},
-		logStreams:       map[uint64]map[string]*LogStreamContext{},
-		containerWaiters: map[string]map[string]chan bool{},
-		containerStarted: map[string]bool{},
+		runningSubs:       map[uint64]*grader_pb.GradeRequest{},
+		cancelChs:         map[uint64]*SubmissionContext{},
+		mu:                &sync.Mutex{},
+		basePath:          basePath,
+		hubAddress:        viper.GetString("hub.address"),
+		token:             viper.GetString("hub.token"),
+		ls:                storage.NewLocalStorage(basePath),
+		sfs:               storage.NewSimpleHTTPFS(viper.GetString("fs.http.url"), viper.GetString("fs.http.token")),
+		containerIds:      map[uint64]string{},
+		logStreams:        map[uint64]map[string]*LogStreamContext{},
+		containerWaiters:  map[string]map[string]chan bool{},
+		containerStarted:  map[string]bool{},
+		heartbeatInterval: heartbeatInterval,
 	}
 	worker.httpTimeout, err = time.ParseDuration(viper.GetString("fs.http.timeout"))
+	if err != nil {
+		l.Fatal("HTTP.Timeout.Invalid", zap.Error(err))
+	}
 	worker.rpcTimeout = 10 * time.Second
+
+	if viper.GetBool("metrics.enabled") {
+		metricsPort := viper.GetInt("metrics.port")
+		l.Info("Metrics.Listen", zap.Int("port", metricsPort))
+		mux := http.NewServeMux()
+		mux.Handle(viper.GetString("metrics.path"), promhttp.Handler())
+		go func() {
+			if err := http.ListenAndServe(fmt.Sprintf(":%d", metricsPort), mux); err != nil {
+				l.Error("Metrics.Serve", zap.Error(err))
+			}
+		}()
+	}
+
 	worker.WorkLoop()
 }
