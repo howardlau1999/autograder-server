@@ -47,10 +47,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-var (
-	zapLogger *zap.Logger
-)
-
 type ServerProvidedTokens struct {
 	ServerProvided  string
 	HcaptchaSiteKey string
@@ -58,6 +54,9 @@ type ServerProvidedTokens struct {
 }
 
 const initialConfig = `
+[server]
+	development=false
+
 [smtp]
     addr=""
     user=""
@@ -72,6 +71,7 @@ const initialConfig = `
 [hub]
 	port=9999
 	token=""
+    heartbeat-timeout="15s"
 
 [web]
 	port=9315
@@ -80,6 +80,9 @@ const initialConfig = `
 	port=19999
 	token=""
 
+[fs.local]
+	dir=""
+
 [hcaptcha]
     site-key=""
     secret=""
@@ -87,17 +90,22 @@ const initialConfig = `
 [github]
     client-id=""
     client-secret=""
+
+[metrics]
+	port=29999
+    path="/metrics"
+
+[db.local]
+	path="db"
 `
 
-const dbPath = "db"
-
 var initializeMarker = []byte("__autograder_initialized")
-var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+var passwordRunes = []rune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 func RandStringRunes(n int) string {
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+		b[i] = passwordRunes[rand.Intn(len(passwordRunes))]
 	}
 	return string(b)
 }
@@ -144,6 +152,11 @@ func serverReadConfig() {
 	viper.SetDefault("hub.port", "9999")
 	viper.SetDefault("fs.http.port", "19999")
 	viper.SetDefault("web.port", "9315")
+	viper.SetDefault("hub.heartbeat-timeout", "15s")
+	viper.SetDefault("metrics.port", "29999")
+	viper.SetDefault("metrics.path", "/metrics")
+	viper.SetDefault("db.local.path", "db")
+	viper.SetDefault("server.development", false)
 
 	err := viper.ReadInConfig()
 	if err != nil {
@@ -159,58 +172,125 @@ func isDatabaseUninitialized(db *pebble.DB) bool {
 	return err == pebble.ErrNotFound
 }
 
-func main() {
-	rand.Seed(time.Now().UnixNano())
+func initEmbeddedStaticWebResources(router chi.Router) {
+	distFS, err := fs.Sub(web.WebResources, "dist")
+	if err != nil {
+		panic(err)
+	}
+	providedTokens := &ServerProvidedTokens{
+		ServerProvided:  "true",
+		HcaptchaSiteKey: viper.GetString("hcaptcha.site-key"),
+		GithubClientId:  viper.GetString("github.client-id"),
+	}
+	tmpl, err := template.ParseFS(distFS, "index.html")
+	var writeTemplate func(w http.ResponseWriter, r *http.Request)
+	if err == nil {
+		rendered := &bytes.Buffer{}
+		err = tmpl.Execute(rendered, providedTokens)
+		if err != nil {
+			panic(err)
+		}
+		indexHTML := rendered.Bytes()
+		writeTemplate = func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(indexHTML)
+		}
+	}
+	fsrv := http.FileServer(http.FS(distFS))
+
+	router.Get(
+		"/*", func(w http.ResponseWriter, r *http.Request) {
+			p := r.URL.Path
+			if len(r.URL.Path) > 1 {
+				p = r.URL.Path[1:]
+			}
+			_, err := distFS.Open(p)
+			if err != nil {
+				if writeTemplate != nil {
+					writeTemplate(w, r)
+					return
+				}
+				http.StripPrefix(r.URL.Path, fsrv).ServeHTTP(w, r)
+			} else {
+				fsrv.ServeHTTP(w, r)
+			}
+		},
+	)
+}
+
+func processCommandLineOptions() bool {
 	var isInit bool
 	var initEmail string
-	var err error
 	var printUsage bool
+	var printConfigTemplate bool
 	pflag.BoolVar(&isInit, "init", false, "Pass this flag to initialize database.")
 	pflag.StringVar(&initEmail, "email", "", "The email for the initialized root user.")
+	pflag.BoolVar(&printConfigTemplate, "config", false, "Print config template.")
 	pflag.BoolVar(&printUsage, "help", false, "Print this message.")
 	pflag.Parse()
 	if printUsage {
 		pflag.Usage()
-		return
+		return true
 	}
-	db, err := pebble.Open(dbPath, &pebble.Options{Merger: repository.NewKVMerger()})
-	if err != nil {
-		panic(err)
+	if printConfigTemplate {
+		fmt.Print(initialConfig)
+		return true
 	}
+
 	if isInit {
+		db, err := pebble.Open(viper.GetString("db.local.path"), &pebble.Options{Merger: repository.NewKVMerger()})
+		if err != nil {
+			panic(err)
+		}
 		if initEmail == "" {
 			log.Printf("Please provide email.")
-			return
+			return true
 		}
 		success := dbInit(db, initEmail)
 		if !success {
-			return
+			return true
 		}
-		_, err = os.Stat("config.toml")
-		if !os.IsNotExist(err) {
-			log.Printf("Failed to write initial config file.")
-			return
-		}
-		f, err := os.OpenFile("config.toml", os.O_RDWR|os.O_CREATE, 0644)
-		if err != nil {
-			panic(err)
-		}
-		_, err = f.Write([]byte(initialConfig))
-		if err != nil {
-			panic(err)
-		}
+		return true
+	}
+	return false
+}
+
+func main() {
+	rand.Seed(time.Now().UnixNano())
+	serverReadConfig()
+	zapLogger, err := zap.NewDevelopment()
+	if err != nil {
+		panic(err)
+	}
+	zap.ReplaceGlobals(zapLogger)
+	defer zapLogger.Sync()
+	if processCommandLineOptions() {
 		return
+	}
+	db, err := pebble.Open(viper.GetString("db.local.path"), &pebble.Options{Merger: repository.NewKVMerger()})
+	if err != nil {
+		zap.L().Fatal("DB.Open", zap.Error(err))
 	}
 	if isDatabaseUninitialized(db) {
 		log.Printf("Database is not initialized. Please run autograder-server --init first.")
 		return
 	}
-	serverReadConfig()
-	cwd, err := os.Getwd()
+	heartbeatTimeout, err := time.ParseDuration(viper.GetString("hub.heartbeat-timeout"))
 	if err != nil {
-		zap.L().Fatal("OS.Getwd", zap.Error(err))
+		zap.L().Fatal("Hub.HeartbeatTimeout.Invalid", zap.Error(err))
 	}
-	ls := storage.NewLocalStorage(cwd)
+
+	localStorageDir := viper.GetString("fs.local.dir")
+	if localStorageDir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			zap.L().Fatal("OS.Getwd", zap.Error(err))
+		}
+		localStorageDir = cwd
+	}
+	localStorage := storage.NewLocalStorage(localStorageDir)
+
+	// Setup external services
 	var m mailer.Mailer
 	if viper.GetBool("mailgun.enabled") {
 		m = mailer.NewMailgunMailer(viper.GetString("mailgun.domain"), viper.GetString("mailgun.api-key"))
@@ -218,11 +298,6 @@ func main() {
 		m = mailer.NewSMTPMailer(
 			viper.GetString("smtp.addr"), viper.GetString("smtp.user"), viper.GetString("smtp.pass"),
 		)
-	}
-
-	distFS, err := fs.Sub(web.WebResources, "dist")
-	if err != nil {
-		panic(err)
 	}
 	hcaptchaClient := hcaptcha.New(viper.GetString("hcaptcha.secret-key"))
 	hcaptchaClient.HTTPClient.Timeout = 30 * time.Second
@@ -244,12 +319,6 @@ func main() {
 			MaxAge:           int(10 * time.Minute / time.Second),
 		},
 	)
-	zapLogger, err = zap.NewDevelopment()
-	if err != nil {
-		panic(err)
-	}
-	zap.ReplaceGlobals(zapLogger)
-	defer zapLogger.Sync()
 	grpc_zap.ReplaceGrpcLoggerV2(zapLogger)
 	autograderServer := grpc.NewServer(
 		grpc_middleware.WithUnaryServerChain(
@@ -286,9 +355,9 @@ func main() {
 		),
 	)
 	srr := repository.NewKVSubmissionReportRepository(db)
-	graderHubService := grader_grpc.NewGraderHubService(db, srr, viper.GetString("hub.token"))
+	graderHubService := grader_grpc.NewGraderHubService(db, srr, viper.GetString("hub.token"), heartbeatTimeout)
 	autograderService := autograder_grpc.NewAutograderServiceServer(
-		db, ls, m, hcaptchaClient, githubOauth2Config, srr, graderHubService,
+		db, localStorage, m, hcaptchaClient, githubOauth2Config, srr, graderHubService,
 	)
 	autograder_pb.RegisterAutograderServiceServer(autograderServer, autograderService)
 	grader_pb.RegisterGraderHubServiceServer(graderHubServer, graderHubService)
@@ -311,7 +380,6 @@ func main() {
 		chiMiddleware.Recoverer,
 		middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler,
 	)
-	router.Get("/metrics", promhttp.Handler().ServeHTTP)
 	router.Options(
 		"/AutograderService/FileUpload",
 		corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP,
@@ -324,47 +392,7 @@ func main() {
 		"/AutograderService/FileDownload/{filename}",
 		corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileDownload)).ServeHTTP,
 	)
-	providedTokens := &ServerProvidedTokens{
-		ServerProvided:  "true",
-		HcaptchaSiteKey: viper.GetString("hcaptcha.site-key"),
-		GithubClientId:  viper.GetString("github.client-id"),
-	}
-	tmpl, err := template.ParseFS(distFS, "index.html")
-	var writeTemplate func(w http.ResponseWriter, r *http.Request)
-	if err == nil {
-		rendered := &bytes.Buffer{}
-		err = tmpl.Execute(rendered, providedTokens)
-		if err != nil {
-			panic(err)
-		}
-		indexHTML := rendered.Bytes()
-		writeTemplate = func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(indexHTML)
-		}
-	}
-	fsrv := http.FileServer(http.FS(distFS))
-
-	router.Get(
-		"/*", http.HandlerFunc(
-			func(w http.ResponseWriter, r *http.Request) {
-				p := r.URL.Path
-				if len(r.URL.Path) > 1 {
-					p = r.URL.Path[1:]
-				}
-				_, err := distFS.Open(p)
-				if err != nil {
-					if writeTemplate != nil {
-						writeTemplate(w, r)
-						return
-					}
-					http.StripPrefix(r.URL.Path, fsrv).ServeHTTP(w, r)
-				} else {
-					fsrv.ServeHTTP(w, r)
-				}
-			},
-		),
-	)
+	initEmbeddedStaticWebResources(router)
 
 	// Communicate with graders
 	graderHubPort := viper.GetInt("hub.port")
@@ -377,6 +405,17 @@ func main() {
 		err := graderHubServer.Serve(graderHubLis)
 		if err != nil {
 			zap.L().Fatal("Server.Grader.Serve", zap.Error(err))
+		}
+	}()
+
+	// Prometheus metrics
+	metricsPort := viper.GetInt("metrics.port")
+	zap.L().Info("Metrics.Listen", zap.Int("port", metricsPort))
+	metricsRouter := chi.NewRouter()
+	metricsRouter.Handle(viper.GetString("metrics.path"), promhttp.Handler())
+	go func() {
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", metricsPort), metricsRouter); err != nil {
+			zap.L().Error("Metrics.Serve", zap.Error(err))
 		}
 	}()
 

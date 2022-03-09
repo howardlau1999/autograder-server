@@ -61,6 +61,7 @@ type GraderHubService struct {
 	submissionReportRepo repository.SubmissionReportRepository
 	gradeRequestMu       *sync.Mutex
 	gradeRequestQueues   map[uint64]*GradeRequestQueue
+	heartbeatTimeout     time.Duration
 
 	onlineMu      *sync.Mutex
 	onlineGraders map[uint64]*model_pb.GraderStatusMetadata
@@ -198,7 +199,7 @@ func (g *GraderHubService) onGraderOffline(graderId uint64) {
 }
 
 func (g *GraderHubService) graderMonitor(graderId uint64, alive chan *time.Time) {
-	timer := time.NewTimer(10 * time.Second)
+	timer := time.NewTimer(g.heartbeatTimeout)
 	logger := zap.L().With(zap.Uint64("graderId", graderId))
 	logger.Info("Grader.Monitor.Start")
 	defer logger.Info("Grader.Monitor.Exit")
@@ -208,7 +209,7 @@ func (g *GraderHubService) graderMonitor(graderId uint64, alive chan *time.Time)
 			if !timer.Stop() {
 				<-timer.C
 			}
-			timer.Reset(15 * time.Second)
+			timer.Reset(g.heartbeatTimeout)
 			grader, err := g.graderRepo.GetGraderById(context.Background(), graderId)
 			if err != nil {
 				logger.Error("Grader.Monitor.GetGrader", zap.Error(err))
@@ -234,6 +235,7 @@ func (g *GraderHubService) graderMonitor(graderId uint64, alive chan *time.Time)
 				logger.Error("Grader.Monitor.UpdateGrader", zap.Error(err))
 			}
 		case t := <-timer.C:
+			timer.Reset(g.heartbeatTimeout)
 			g.onlineMu.Lock()
 			delete(g.onlineGraders, graderId)
 			g.onlineMu.Unlock()
@@ -259,7 +261,6 @@ func (g *GraderHubService) graderMonitor(graderId uint64, alive chan *time.Time)
 			if err != nil {
 				logger.Error("Grader.Monitor.UpdateGrader", zap.Error(err))
 			}
-			timer.Reset(15 * time.Second)
 		}
 	}
 }
@@ -830,7 +831,9 @@ func (g *GraderHubService) CancelGrade(
 	return nil
 }
 
-func NewGraderHubService(db *pebble.DB, srr repository.SubmissionReportRepository, token string) *GraderHubService {
+func NewGraderHubService(
+	db *pebble.DB, srr repository.SubmissionReportRepository, token string, heartbeatInterval time.Duration,
+) *GraderHubService {
 	gr := repository.NewKVGraderRepository(db)
 	svc := &GraderHubService{
 		graderRepo:           gr,
@@ -851,6 +854,7 @@ func NewGraderHubService(db *pebble.DB, srr repository.SubmissionReportRepositor
 		gradeRequestQueues:   map[uint64]*GradeRequestQueue{},
 		monitorChs:           map[uint64]chan *time.Time{},
 		token:                token,
+		heartbeatTimeout:     heartbeatInterval,
 	}
 	svc.schedulerCond = sync.NewCond(svc.queuedMu)
 	ids, graders, err := gr.GetAllGraders(context.Background())
