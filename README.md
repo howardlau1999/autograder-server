@@ -18,13 +18,19 @@ mkdir -p pkg/web/dist
 go build -tags containers_image_openpgp -o autograder-server cmd/autograder_server.go
 ```
 
+To build the grader service
+
+```bash
+go build -tags containers_image_openpgp -o autograder-grader cmd/autograder_grader.go
+```
+
 To build with the client-side webpage code, Node.js 16+ is needed.
 
 ```bash
 git submodule --update --init 
 npm install -g @angular/cli
 cd web
-npm install && npm install vcd-stream --ignore-scripts && ng build --output-path ../pkg/web/dist
+npm install && npm install --no-save --ignore-scripts vcd-stream && ng build --output-path ../pkg/web/dist
 cd ..
 go build -tags containers_image_openpgp -o autograder-server cmd/autograder_server.go
 ```
