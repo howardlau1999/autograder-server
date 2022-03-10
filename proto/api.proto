@@ -565,6 +565,7 @@ message ExportAssignmentGradesResponse {
     uint64 score = 5;
     uint64 max_score = 6;
     uint64 submission_count = 7;
+    uint64 submission_id = 8;
   }
   repeated Entry entries = 1;
 }

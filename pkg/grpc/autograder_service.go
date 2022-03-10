@@ -1873,12 +1873,11 @@ func (a *AutograderService) ExportAssignmentGrades(
 		if err != nil {
 			continue
 		}
-		score := uint64(0)
-		maxScore := uint64(0)
+
+		var submission *autograder_pb.SubmissionInfo
 		for _, sub := range submissions {
-			if sub.Score > score {
-				score = sub.Score
-				maxScore = sub.MaxScore
+			if submission == nil || sub.Score > submission.Score {
+				submission = sub
 			}
 		}
 		entry := &autograder_pb.ExportAssignmentGradesResponse_Entry{
@@ -1887,8 +1886,9 @@ func (a *AutograderService) ExportAssignmentGrades(
 			StudentId:       dbUser.StudentId,
 			Nickname:        dbUser.Nickname,
 			SubmissionCount: uint64(len(submissions)),
-			Score:           score,
-			MaxScore:        maxScore,
+			Score:           submission.GetScore(),
+			MaxScore:        submission.GetMaxScore(),
+			SubmissionId:    submission.GetSubmissionId(),
 		}
 		entries = append(entries, entry)
 	}
