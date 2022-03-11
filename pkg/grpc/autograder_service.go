@@ -69,9 +69,9 @@ type AutograderService struct {
 	graderHubSvc         *grader_grpc.GraderHubService
 }
 
-var DownloadJWTSignKey = []byte("download-token-sign-key")
-var UploadJWTSignKey = []byte("upload-token-sign-key")
-var UserJWTSignKey = []byte("user-token-sign-key")
+var DownloadJWTSignKey = []byte(viper.GetString("token.secret.download"))
+var UploadJWTSignKey = []byte(viper.GetString("token.secret.upload"))
+var UserJWTSignKey = []byte(viper.GetString("token.secret.session"))
 var ResetCodeMax = 900000
 
 const MaxMultipartFormParseMemory = 10 * 1024 * 1024

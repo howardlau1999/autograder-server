@@ -97,6 +97,11 @@ const initialConfig = `
 
 [db.local]
 	path="db"
+
+[token.secret]
+	session="user-session-token-secret"
+	upload="upload-token-secret"
+	download="download-token-secret"
 `
 
 var initializeMarker = []byte("__autograder_initialized")
@@ -157,6 +162,9 @@ func serverReadConfig() {
 	viper.SetDefault("metrics.path", "/metrics")
 	viper.SetDefault("db.local.path", "db")
 	viper.SetDefault("server.development", false)
+	viper.SetDefault("token.secret.session", "user-session-token-secret")
+	viper.SetDefault("token.secret.upload", "upload-token-secret")
+	viper.SetDefault("token.secret.download", "download-token-secret")
 
 	err := viper.ReadInConfig()
 	if err != nil {
