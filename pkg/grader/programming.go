@@ -172,7 +172,7 @@ func (d *DockerProgrammingGrader) runDocker(
 			return
 		}
 	}
-	ctCfg := &container.Config{
+	containerConfig := &container.Config{
 		Hostname:     "",
 		Domainname:   "",
 		User:         "",
@@ -200,23 +200,26 @@ func (d *DockerProgrammingGrader) runDocker(
 	os.MkdirAll(runDir, 0755)
 	os.MkdirAll(resultsDir, 0755)
 	os.MkdirAll(outputsDir, 0755)
-	hstCfg := &container.HostConfig{
+	hostConfig := &container.HostConfig{
 		Mounts: []mount.Mount{
 			{Type: mount.TypeBind, Source: subDir, Target: "/autograder/submission"},
 			{Type: mount.TypeBind, Source: resultsDir, Target: "/autograder/results"},
 		},
 	}
 	if config.GetCpu() > 0 {
-		hstCfg.CPUQuota = int64(math.Round(float64(100000 * config.GetCpu())))
-		hstCfg.CPUShares = int64(math.Round(float64(1024 * config.GetCpu())))
+		hostConfig.CPUQuota = int64(math.Round(float64(100000 * config.GetCpu())))
+		hostConfig.CPUShares = int64(math.Round(float64(1024 * config.GetCpu())))
 	}
 	if config.GetMemory() > 0 {
-		hstCfg.Memory = config.GetMemory()
+		hostConfig.Memory = config.GetMemory()
 	}
-	netCfg := &network.NetworkingConfig{}
+	networkingConfig := &network.NetworkingConfig{}
 	platform := &specs.Platform{OS: "linux"}
 	var body container.ContainerCreateCreatedBody
-	body, err = d.cli.ContainerCreate(ctx, ctCfg, hstCfg, netCfg, platform, "")
+	body, err = d.cli.ContainerCreate(
+		ctx,
+		containerConfig, hostConfig, networkingConfig, platform, fmt.Sprintf("submission-%d", submissionId),
+	)
 	if err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
