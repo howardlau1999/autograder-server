@@ -214,7 +214,7 @@ func (d *DockerProgrammingGrader) runDocker(
 		hstCfg.Memory = config.GetMemory()
 	}
 	netCfg := &network.NetworkingConfig{}
-	platform := &specs.Platform{Architecture: "amd64", OS: "linux"}
+	platform := &specs.Platform{OS: "linux"}
 	var body container.ContainerCreateCreatedBody
 	body, err = d.cli.ContainerCreate(ctx, ctCfg, hstCfg, netCfg, platform, "")
 	if err != nil {
