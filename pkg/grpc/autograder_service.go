@@ -2012,6 +2012,25 @@ func (a *AutograderService) StreamLog(
 	return nil
 }
 
+func (a *AutograderService) GetAllCourses(
+	ctx context.Context, request *autograder_pb.GetAllCoursesRequest,
+) (*autograder_pb.GetAllCoursesResponse, error) {
+	courses, ids, err := a.courseRepo.GetAllCourses(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "GET_ALL_COURSES")
+	}
+	var courseInfos []*autograder_pb.GetAllCoursesResponse_CourseInfo
+	for i := 0; i < len(courses); i++ {
+		courseInfos = append(
+			courseInfos, &autograder_pb.GetAllCoursesResponse_CourseInfo{
+				CourseId: ids[i],
+				Course:   courses[i],
+			},
+		)
+	}
+	return &autograder_pb.GetAllCoursesResponse{Courses: courseInfos}, nil
+}
+
 func NewAutograderServiceServer(
 	db *pebble.DB, ls *storage.LocalStorage, mailer mailer.Mailer, captchaVerifier *hcaptcha.Client,
 	ghOauth2Config *oauth2.Config,

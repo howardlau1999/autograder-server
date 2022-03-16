@@ -657,6 +657,18 @@ message WebStreamLogResponse {
   bytes data = 1;
 }
 
+message GetAllCoursesRequest {
+
+}
+
+message GetAllCoursesResponse {
+  message CourseInfo {
+    uint64 course_id = 1;
+    Course course = 2;
+  }
+  repeated CourseInfo courses = 1;
+}
+
 service AutograderService {
    rpc Login(LoginRequest) returns (LoginResponse);
    rpc GetCourseList(GetCourseListRequest) returns (GetCourseListResponse);
@@ -712,4 +724,5 @@ service AutograderService {
    rpc GetGradeQueue(GetGradeQueueRequest) returns (GetGradeQueueResponse);
    rpc DeleteLeaderboard(DeleteLeaderboardRequest) returns (DeleteLeaderboardResponse);
    rpc StreamLog(WebStreamLogRequest) returns (stream WebStreamLogResponse);
+   rpc GetAllCourses(GetAllCoursesRequest) returns (GetAllCoursesResponse);
 }

@@ -1,9 +1,11 @@
 package repository
 
 import (
-	model_pb "autograder-server/pkg/model/proto"
 	"context"
 	"fmt"
+	"strconv"
+
+	model_pb "autograder-server/pkg/model/proto"
 	"github.com/cockroachdb/pebble"
 	"google.golang.org/protobuf/proto"
 )
@@ -17,11 +19,32 @@ type CourseRepository interface {
 	GetUsersByCourse(ctx context.Context, courseId uint64) ([]*model_pb.CourseMember, error)
 	GetAssignmentsByCourse(ctx context.Context, courseId uint64) ([]uint64, error)
 	UpdateCourse(ctx context.Context, courseId uint64, course *model_pb.Course) error
+	GetAllCourses(ctx context.Context) ([]*model_pb.Course, []uint64, error)
 }
 
 type KVCourseRepository struct {
 	db  *pebble.DB
 	seq Sequencer
+}
+
+func (cr *KVCourseRepository) GetAllCourses(ctx context.Context) ([]*model_pb.Course, []uint64, error) {
+	prefix := cr.getIdPrefix()
+	prefixLen := len(prefix)
+	iter := cr.db.NewIter(PrefixIterOptions(prefix))
+	var courses []*model_pb.Course
+	var ids []uint64
+	for iter.First(); iter.Valid(); iter.Next() {
+		idStr := string(iter.Key()[prefixLen:])
+		id, _ := strconv.Atoi(idStr)
+		course := &model_pb.Course{}
+		err := proto.Unmarshal(iter.Value(), course)
+		if err != nil {
+			return nil, nil, err
+		}
+		courses = append(courses, course)
+		ids = append(ids, uint64(id))
+	}
+	return courses, ids, nil
 }
 
 func (cr *KVCourseRepository) RemoveUser(ctx context.Context, courseId uint64, userId uint64) error {
@@ -60,6 +83,10 @@ func (cr *KVCourseRepository) AddUser(ctx context.Context, member *model_pb.Cour
 		return err
 	}
 	return cr.db.Set(cr.getUserKey(member.GetCourseId(), member.GetUserId()), raw, pebble.Sync)
+}
+
+func (cr *KVCourseRepository) getIdPrefix() []byte {
+	return []byte("course:id:")
 }
 
 func (cr *KVCourseRepository) getIdKey(id uint64) []byte {

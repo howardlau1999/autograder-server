@@ -76,6 +76,7 @@ type AutograderServiceClient interface {
 	GetGradeQueue(ctx context.Context, in *GetGradeQueueRequest, opts ...grpc.CallOption) (*GetGradeQueueResponse, error)
 	DeleteLeaderboard(ctx context.Context, in *DeleteLeaderboardRequest, opts ...grpc.CallOption) (*DeleteLeaderboardResponse, error)
 	StreamLog(ctx context.Context, in *WebStreamLogRequest, opts ...grpc.CallOption) (AutograderService_StreamLogClient, error)
+	GetAllCourses(ctx context.Context, in *GetAllCoursesRequest, opts ...grpc.CallOption) (*GetAllCoursesResponse, error)
 }
 
 type autograderServiceClient struct {
@@ -618,6 +619,15 @@ func (x *autograderServiceStreamLogClient) Recv() (*WebStreamLogResponse, error)
 	return m, nil
 }
 
+func (c *autograderServiceClient) GetAllCourses(ctx context.Context, in *GetAllCoursesRequest, opts ...grpc.CallOption) (*GetAllCoursesResponse, error) {
+	out := new(GetAllCoursesResponse)
+	err := c.cc.Invoke(ctx, "/AutograderService/GetAllCourses", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutograderServiceServer is the server API for AutograderService service.
 // All implementations must embed UnimplementedAutograderServiceServer
 // for forward compatibility
@@ -676,6 +686,7 @@ type AutograderServiceServer interface {
 	GetGradeQueue(context.Context, *GetGradeQueueRequest) (*GetGradeQueueResponse, error)
 	DeleteLeaderboard(context.Context, *DeleteLeaderboardRequest) (*DeleteLeaderboardResponse, error)
 	StreamLog(*WebStreamLogRequest, AutograderService_StreamLogServer) error
+	GetAllCourses(context.Context, *GetAllCoursesRequest) (*GetAllCoursesResponse, error)
 	mustEmbedUnimplementedAutograderServiceServer()
 }
 
@@ -844,6 +855,9 @@ func (UnimplementedAutograderServiceServer) DeleteLeaderboard(context.Context, *
 }
 func (UnimplementedAutograderServiceServer) StreamLog(*WebStreamLogRequest, AutograderService_StreamLogServer) error {
 	return status.Errorf(codes.Unimplemented, "method StreamLog not implemented")
+}
+func (UnimplementedAutograderServiceServer) GetAllCourses(context.Context, *GetAllCoursesRequest) (*GetAllCoursesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAllCourses not implemented")
 }
 func (UnimplementedAutograderServiceServer) mustEmbedUnimplementedAutograderServiceServer() {}
 
@@ -1836,6 +1850,24 @@ func (x *autograderServiceStreamLogServer) Send(m *WebStreamLogResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _AutograderService_GetAllCourses_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAllCoursesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutograderServiceServer).GetAllCourses(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/AutograderService/GetAllCourses",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutograderServiceServer).GetAllCourses(ctx, req.(*GetAllCoursesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutograderService_ServiceDesc is the grpc.ServiceDesc for AutograderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2050,6 +2082,10 @@ var AutograderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteLeaderboard",
 			Handler:    _AutograderService_DeleteLeaderboard_Handler,
+		},
+		{
+			MethodName: "GetAllCourses",
+			Handler:    _AutograderService_GetAllCourses_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
