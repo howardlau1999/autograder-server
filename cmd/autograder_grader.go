@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -423,27 +422,35 @@ func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
 	}
 	// Wait For Container Start
 	// TODO find a better way
-	err = retry.Do(
-		func() error {
-			if containerId != "" {
-				return nil
-			}
+	ticker := time.NewTicker(1 * time.Second)
+	seconds := 0
+	for {
+		if containerId != "" {
+			break
+		}
+		slCli.Send(
+			&grader_pb.StreamLogResponse{
+				Data: []byte(fmt.Sprintf(
+					"creating container...(%ds)\r",
+					seconds,
+				)),
+			},
+		)
+		select {
+		case <-ticker.C:
 			g.mu.Lock()
 			containerId = g.containerIds[submissionId]
 			g.mu.Unlock()
-			if containerId == "" {
-				return errors.New("container not found")
-			}
-			return nil
-		},
-		retry.Attempts(1000),
-	)
-	if containerId == "" {
-		return
+			seconds++
+		case <-ctx.Done():
+			return
+		}
 	}
+
 	var r io.ReadCloser
 	g.mu.Lock()
 	if _, found := g.containerStarted[containerId]; !found {
+		slCli.Send(&grader_pb.StreamLogResponse{Data: []byte("starting container...\n")})
 		ch := make(chan bool)
 		if g.containerWaiters[containerId] == nil {
 			g.containerWaiters[containerId] = map[string]chan bool{}
