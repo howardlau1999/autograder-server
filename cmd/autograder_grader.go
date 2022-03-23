@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/storage"
 	"github.com/avast/retry-go"
+	"github.com/docker/docker/pkg/stdcopy"
 	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -484,14 +486,18 @@ func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
 		<-ctx.Done()
 		r.Close()
 	}()
-	buffer := make([]byte, 32*1024, 32*1024)
+	buffer := &bytes.Buffer{}
+	go func() {
+		stdcopy.StdCopy(buffer, buffer, r)
+	}()
+	logBuf := make([]byte, 32*1024, 32*1024)
 	for {
-		n, err := r.Read(buffer)
+		n, err := r.Read(logBuf)
 		if err != nil {
 			logger.Error("StreamLog.Read", zap.Error(err))
 			break
 		}
-		err = slCli.Send(&grader_pb.StreamLogResponse{Data: buffer[:n]})
+		err = slCli.Send(&grader_pb.StreamLogResponse{Data: logBuf[:n]})
 		if err != nil {
 			logger.Error("StreamLog.Send", zap.Error(err))
 			break
