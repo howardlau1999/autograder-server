@@ -18,6 +18,7 @@ import (
 	grader_grpc "autograder-server/pkg/grader/grpc"
 	grader_pb "autograder-server/pkg/grader/proto"
 	autograder_grpc "autograder-server/pkg/grpc"
+	"autograder-server/pkg/logging"
 	"autograder-server/pkg/mailer"
 	"autograder-server/pkg/middleware"
 	model_pb "autograder-server/pkg/model/proto"
@@ -102,6 +103,11 @@ const initialConfig = `
 	session="user-session-token-secret"
 	upload="upload-token-secret"
 	download="download-token-secret"
+
+[log]
+	development=false
+	level="info"
+	file="server.log"
 `
 
 var initializeMarker = []byte("__autograder_initialized")
@@ -165,6 +171,9 @@ func serverReadConfig() {
 	viper.SetDefault("token.secret.session", "user-session-token-secret")
 	viper.SetDefault("token.secret.upload", "upload-token-secret")
 	viper.SetDefault("token.secret.download", "download-token-secret")
+	viper.SetDefault("log.level", "info")
+	viper.SetDefault("log.file", "server.log")
+	viper.SetDefault("log.development", "false")
 
 	err := viper.ReadInConfig()
 	if err != nil {
@@ -266,11 +275,9 @@ func processCommandLineOptions() bool {
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	serverReadConfig()
-	zapLogger, err := zap.NewDevelopment()
-	if err != nil {
-		panic(err)
-	}
-	zap.ReplaceGlobals(zapLogger)
+	zapLogger := logging.Init(
+		viper.GetString("log.level"), viper.GetString("log.file"), viper.GetBool("log.development"),
+	)
 	defer zapLogger.Sync()
 	if processCommandLineOptions() {
 		return

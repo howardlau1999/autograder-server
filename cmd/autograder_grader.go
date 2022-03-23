@@ -15,6 +15,7 @@ import (
 
 	"autograder-server/pkg/grader"
 	grader_pb "autograder-server/pkg/grader/proto"
+	"autograder-server/pkg/logging"
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/storage"
 	"github.com/avast/retry-go"
@@ -55,6 +56,11 @@ const graderInitialConfig = `
 	enabled=true
 	port=39999
 	path="/metrics"
+
+[log]
+	development=false
+	level="info"
+	file="grader.log"
 `
 
 type GraderEnvKeyReplacer struct {
@@ -126,6 +132,9 @@ func graderReadConfig() {
 	viper.SetDefault("metrics.port", "39999")
 	viper.SetDefault("metrics.enabled", true)
 	viper.SetDefault("metrics.path", "/metrics")
+	viper.SetDefault("log.level", "info")
+	viper.SetDefault("log.file", "grader.log")
+	viper.SetDefault("log.development", "false")
 
 	err = viper.ReadInConfig()
 	if err != nil {
@@ -778,12 +787,14 @@ func main() {
 	if graderProcessCommandLineOptions() {
 		return
 	}
-	l, _ := zap.NewDevelopment()
-	zap.ReplaceGlobals(l)
 	graderReadConfig()
+	zapLogger := logging.Init(
+		viper.GetString("log.level"), viper.GetString("log.file"), viper.GetBool("log.development"),
+	)
+	defer zapLogger.Sync()
 	heartbeatInterval, err := time.ParseDuration(viper.GetString("grader.heartbeat-interval"))
 	if err != nil {
-		l.Fatal("Grader.HeartbeatInterval.Invalid", zap.Error(err))
+		zapLogger.Fatal("Grader.HeartbeatInterval.Invalid", zap.Error(err))
 	}
 	basePath := viper.GetString("fs.local.dir")
 	cwd, err := os.Getwd()
@@ -808,18 +819,18 @@ func main() {
 	}
 	worker.httpTimeout, err = time.ParseDuration(viper.GetString("fs.http.timeout"))
 	if err != nil {
-		l.Fatal("HTTP.Timeout.Invalid", zap.Error(err))
+		zapLogger.Fatal("HTTP.Timeout.Invalid", zap.Error(err))
 	}
 	worker.rpcTimeout = 10 * time.Second
 
 	if viper.GetBool("metrics.enabled") {
 		metricsPort := viper.GetInt("metrics.port")
-		l.Info("Metrics.Listen", zap.Int("port", metricsPort))
+		zapLogger.Info("Metrics.Listen", zap.Int("port", metricsPort))
 		mux := http.NewServeMux()
 		mux.Handle(viper.GetString("metrics.path"), promhttp.Handler())
 		go func() {
 			if err := http.ListenAndServe(fmt.Sprintf(":%d", metricsPort), mux); err != nil {
-				l.Error("Metrics.Serve", zap.Error(err))
+				zapLogger.Error("Metrics.Serve", zap.Error(err))
 			}
 		}()
 	}

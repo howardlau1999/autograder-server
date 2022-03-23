@@ -110,3 +110,4 @@ db
 runs
 uploads
 pkg/web/dist
+*.log
