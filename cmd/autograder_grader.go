@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -486,13 +485,14 @@ func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
 		<-ctx.Done()
 		r.Close()
 	}()
-	buffer := &bytes.Buffer{}
-	go func() {
-		stdcopy.StdCopy(buffer, buffer, r)
-	}()
 	logBuf := make([]byte, 32*1024, 32*1024)
+	pr, pw := io.Pipe()
+	go func() {
+		stdcopy.StdCopy(pw, pw, r)
+		pw.Close()
+	}()
 	for {
-		n, err := buffer.Read(logBuf)
+		n, err := pr.Read(logBuf)
 		if err != nil {
 			logger.Error("StreamLog.Read", zap.Error(err))
 			break
