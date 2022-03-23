@@ -492,7 +492,7 @@ func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
 	}()
 	logBuf := make([]byte, 32*1024, 32*1024)
 	for {
-		n, err := r.Read(logBuf)
+		n, err := buffer.Read(logBuf)
 		if err != nil {
 			logger.Error("StreamLog.Read", zap.Error(err))
 			break
