@@ -41,6 +41,9 @@ const graderInitialConfig = `
 	tags="docker,x64"
 	heartbeat-interval="10s"
 
+[numa]
+	memset=""
+
 [hub]
 	address="localhost:9999"
 	token=""
@@ -595,6 +598,7 @@ func (g *GraderWorker) gradeOneSubmission(
 		req.GetSubmissionId(),
 		req.GetSubmission(),
 		req.GetConfig(),
+		viper.GetString("numa.memset"),
 		notifyC,
 	)
 	for r := range notifyC {
