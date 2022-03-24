@@ -164,7 +164,7 @@ func (d *DockerProgrammingGrader) runDocker(
 			logger.Error("Docker.Run.PullImage.ReadAll", zap.Error(err))
 			return
 		}
-		logger.Info("Docker.Run.PullImage.Progress", zap.ByteString("progress", pullProgressBuf[:n]))
+		logger.Debug("Docker.Run.PullImage.Progress", zap.ByteString("progress", pullProgressBuf[:n]))
 	}
 	containerConfig := &container.Config{
 		Hostname:     "",
