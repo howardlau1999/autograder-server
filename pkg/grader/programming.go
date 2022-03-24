@@ -16,7 +16,6 @@ import (
 	model_pb "autograder-server/pkg/model/proto"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -134,35 +133,29 @@ func (d *DockerProgrammingGrader) runDocker(
 ) (internalError int64, exitCode int64, resultsJSONPath string, err error) {
 	defer close(containerIdCh)
 	defer close(containerStartCh)
+
 	logger := GetGraderLogger(ctx).With(zap.Uint64("submissionId", submissionId), zap.String("image", config.Image))
 	logger.Debug("Docker.Run.Enter")
 	defer logger.Debug("Docker.Run.Exit")
-	var images []types.ImageSummary
-	images, err = d.cli.ImageList(
-		ctx, types.ImageListOptions{
-			All:     false,
-			Filters: filters.NewArgs(filters.Arg("reference", fmt.Sprintf("%s", config.Image))),
-		},
-	)
+	var pullProgress io.ReadCloser
+	pullProgress, err = d.cli.ImagePull(ctx, config.Image, types.ImagePullOptions{})
 	if err != nil {
-		internalError = ErrListImage
-		logger.Error("Docker.Run.ListImage", zap.Error(err))
-		return
-	}
-	if len(images) == 0 {
-		var closer io.ReadCloser
-		closer, err = d.cli.ImagePull(ctx, config.Image, types.ImagePullOptions{})
-		if err != nil {
-			if ctx.Err() != nil {
-				err = ctx.Err()
-				return
-			}
-			internalError = ErrPullImage
-			logger.Error("Docker.Run.PullImage", zap.Error(err))
+		if ctx.Err() != nil {
+			err = ctx.Err()
 			return
 		}
-		_, err = ioutil.ReadAll(closer)
+		internalError = ErrPullImage
+		logger.Error("Docker.Run.PullImage", zap.Error(err))
+		return
+	}
+	pullProgressBuf := make([]byte, 32*1024, 32*1024)
+	var n int
+	for {
+		n, err = pullProgress.Read(pullProgressBuf)
 		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			if ctx.Err() != nil {
 				err = ctx.Err()
 				return
@@ -171,6 +164,7 @@ func (d *DockerProgrammingGrader) runDocker(
 			logger.Error("Docker.Run.PullImage.ReadAll", zap.Error(err))
 			return
 		}
+		logger.Info("Docker.Run.PullImage.Progress", zap.ByteString("progress", pullProgressBuf[:n]))
 	}
 	containerConfig := &container.Config{
 		Hostname:     "",
