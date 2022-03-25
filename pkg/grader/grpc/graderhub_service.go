@@ -750,6 +750,8 @@ func (g *GraderHubService) StreamLogCallback(server grader_pb.GraderHubService_S
 	return nil
 }
 
+const ErrGradeCallback = -201
+
 func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_GradeCallbackServer) error {
 	r := &grader_pb.GradeResponse{}
 	var submissionId uint64
@@ -757,6 +759,13 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 	for {
 		err = server.RecvMsg(r)
 		if err != nil {
+			brief := &model_pb.SubmissionBriefReport{
+				Status: model_pb.SubmissionStatus_Failed, InternalError: ErrGradeCallback,
+			}
+			report := &model_pb.SubmissionReport{InternalError: ErrGradeCallback}
+			g.submissionReportRepo.UpdateSubmissionBriefReport(context.Background(), submissionId, brief)
+			g.submissionReportRepo.UpdateSubmissionReport(context.Background(), submissionId, report)
+			g.sendGradeReport(submissionId, &grader_pb.GradeReport{Report: report, Brief: brief})
 			break
 		}
 		submissionId = r.GetSubmissionId()
@@ -783,9 +792,7 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 			break
 		}
 	}
-	if err == nil {
-		g.onSubmissionFinished(submissionId)
-	}
+	g.onSubmissionFinished(submissionId)
 	return nil
 }
 
@@ -861,6 +868,7 @@ func NewGraderHubService(
 	if err != nil {
 		panic(err)
 	}
+	gr.ClearRunning(context.Background())
 	for i := 0; i < len(ids); i++ {
 		if graders[i].GetStatus() == model_pb.GraderStatusMetadata_Online {
 			graders[i].Status = model_pb.GraderStatusMetadata_Unknown

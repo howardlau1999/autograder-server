@@ -33,6 +33,7 @@ type GraderRepository interface {
 	GetMetadata(ctx context.Context, graderId uint64, key []byte) ([]byte, error)
 	DeleteMetadata(ctx context.Context, graderId uint64, key []byte) error
 	GetAllMetadata(ctx context.Context, graderId uint64) ([][]byte, [][]byte, error)
+	ClearRunning(ctx context.Context)
 }
 
 type KVGraderRepository struct {
@@ -79,6 +80,14 @@ func (gr *KVGraderRepository) getMetadataKey(graderId uint64, key []byte) []byte
 
 func (gr *KVGraderRepository) getMetadataPrefix(graderId uint64) []byte {
 	return []byte(fmt.Sprintf("grader:metadata:id:%d:", graderId))
+}
+
+func (gr *KVGraderRepository) ClearRunning(ctx context.Context) {
+	prefix := []byte("running:")
+	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	for iter.First(); iter.Valid(); iter.Next() {
+		gr.db.Delete(iter.Key(), pebble.Sync)
+	}
 }
 
 func (gr *KVGraderRepository) GetSubmissionsByGrader(ctx context.Context, graderId uint64) ([]uint64, error) {
@@ -143,15 +152,15 @@ func (gr *KVGraderRepository) getGraderNameKey(name string) []byte {
 }
 
 func (gr *KVGraderRepository) getSubmissionGraderPrefix() []byte {
-	return []byte("submission:grader:")
+	return []byte("running:submission:grader:")
 }
 
 func (gr *KVGraderRepository) getGraderSubmissionPrefix(graderId uint64) []byte {
-	return []byte(fmt.Sprintf("grader:submission:%d:", graderId))
+	return []byte(fmt.Sprintf("running:grader:submission:%d:", graderId))
 }
 
 func (gr *KVGraderRepository) getGraderSubmissionKey(graderId uint64, submissionId uint64) []byte {
-	return []byte(fmt.Sprintf("grader:submission:%d:%d", graderId, submissionId))
+	return []byte(fmt.Sprintf("running:grader:submission:%d:%d", graderId, submissionId))
 }
 
 func (gr *KVGraderRepository) getSubmissionGraderKey(submissionId uint64) []byte {
