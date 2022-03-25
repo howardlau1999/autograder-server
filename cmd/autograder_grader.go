@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -612,8 +613,10 @@ func (g *GraderWorker) gradeOneSubmission(
 }
 
 func (g *GraderWorker) getNewClient() (*grpc.ClientConn, grader_pb.GraderHubServiceClient) {
+	keep := keepalive.ClientParameters{PermitWithoutStream: true, Time: 5 * time.Second}
 	conn, err := grpc.Dial(
 		g.hubAddress,
+		grpc.WithKeepaliveParams(keep),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(
 			grpc_opentracing.UnaryClientInterceptor(),

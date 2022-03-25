@@ -46,6 +46,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
 
 type ServerProvidedTokens struct {
@@ -353,7 +354,11 @@ func main() {
 			grpc_recovery.StreamServerInterceptor(),
 		),
 	)
+	kaep := keepalive.EnforcementPolicy{PermitWithoutStream: true, MinTime: 1 * time.Second}
+	ksap := keepalive.ServerParameters{Time: 5 * time.Second}
 	graderHubServer := grpc.NewServer(
+		grpc.KeepaliveEnforcementPolicy(kaep),
+		grpc.KeepaliveParams(ksap),
 		grpc_middleware.WithUnaryServerChain(
 			grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
 			grpc_opentracing.UnaryServerInterceptor(),
