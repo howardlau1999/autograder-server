@@ -44,6 +44,7 @@ const graderInitialConfig = `
 
 [numa]
 	memset=""
+	cpuset=""
 
 [hub]
 	address="localhost:9999"
@@ -600,6 +601,7 @@ func (g *GraderWorker) gradeOneSubmission(
 		req.GetSubmission(),
 		req.GetConfig(),
 		viper.GetString("numa.memset"),
+		viper.GetString("numa.cpuset"),
 		notifyC,
 	)
 	for r := range notifyC {

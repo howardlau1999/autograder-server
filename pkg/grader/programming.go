@@ -114,7 +114,6 @@ func (d *DockerProgrammingGrader) BuildImage(ctx context.Context, buildContext i
 }
 
 const (
-	ErrListImage             = -1
 	ErrPullImage             = 1
 	ErrReadPullImageResponse = 2
 	ErrCreateContainer       = 3
@@ -129,7 +128,7 @@ const (
 
 func (d *DockerProgrammingGrader) runDocker(
 	ctx context.Context, basePath string, submissionId uint64, submission *model_pb.Submission,
-	config *model_pb.ProgrammingAssignmentConfig, cpusetMems string, containerIdCh chan string,
+	config *model_pb.ProgrammingAssignmentConfig, cpusetMems string, cpusetCpus string, containerIdCh chan string,
 	containerStartCh chan bool,
 ) (internalError int64, exitCode int64, resultsJSONPath string, err error) {
 	defer close(containerIdCh)
@@ -203,6 +202,9 @@ func (d *DockerProgrammingGrader) runDocker(
 	}
 	if cpusetMems != "" {
 		hostConfig.CpusetMems = cpusetMems
+	}
+	if cpusetCpus != "" {
+		hostConfig.CpusetCpus = cpusetCpus
 	}
 	if config.GetCpu() > 0 {
 		hostConfig.CPUQuota = int64(math.Round(float64(100000 * config.GetCpu())))
@@ -302,7 +304,8 @@ func (d *DockerProgrammingGrader) RemoveContainer(ctx context.Context, logger *z
 func (d *DockerProgrammingGrader) GradeSubmission(
 	ctx context.Context, basePath string,
 	submissionId uint64, submission *model_pb.Submission,
-	config *model_pb.ProgrammingAssignmentConfig, cpusetMems string, notifyC chan *grader_pb.GradeReport,
+	config *model_pb.ProgrammingAssignmentConfig, cpusetMems string, cpusetCpus string,
+	notifyC chan *grader_pb.GradeReport,
 ) {
 	d.mu.Lock()
 	for d.running >= d.concurrency {
@@ -345,7 +348,7 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 		}
 	}()
 	internalError, exitCode, resultsJSONPath, err := d.runDocker(
-		ctx, basePath, submissionId, submission, config, cpusetMems, containerIdCh, containerStartCh,
+		ctx, basePath, submissionId, submission, config, cpusetMems, cpusetCpus, containerIdCh, containerStartCh,
 	)
 	if err == context.Canceled {
 		briefPB.Status = model_pb.SubmissionStatus_Cancelled
