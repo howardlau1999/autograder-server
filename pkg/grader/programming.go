@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -411,16 +412,25 @@ WriteReport:
 	if readOutput {
 		r, err := d.cli.ContainerLogs(
 			ctx, containerId,
-			types.ContainerLogsOptions{Follow: false, Tail: "500", ShowStderr: false, ShowStdout: true},
+			types.ContainerLogsOptions{Follow: false, Tail: "500", ShowStderr: true, ShowStdout: true},
 		)
 		if err == nil {
-			data, err := ioutil.ReadAll(r)
+			pr, pw := io.Pipe()
+			go func() {
+				stdcopy.StdCopy(pw, pw, r)
+				pw.Close()
+			}()
+			data, err := ioutil.ReadAll(pr)
 			if err == nil {
 				resultsPB.Output = string(data)
 				if len(resultsPB.Output) > 500*1024 {
 					resultsPB.Output = resultsPB.Output[len(resultsPB.Output)-500*1024:]
 				}
+			} else {
+				logger.Error("Grader.ContainerLog.Read", zap.Error(err))
 			}
+		} else {
+			logger.Error("Grader.ContainerLog.Read", zap.Error(err))
 		}
 	}
 	resultsPB.InternalError = internalError
