@@ -382,6 +382,7 @@ func (g *GraderWorker) onSubmissionFinished(submissionId uint64) {
 		close(ch)
 	}
 	delete(g.containerWaiters, g.containerIds[submissionId])
+	g.containerIds[submissionId] = ""
 	delete(g.containerIds, submissionId)
 	for _, c := range g.logStreams[submissionId] {
 		c.cancel()
@@ -610,6 +611,7 @@ func (g *GraderWorker) gradeOneSubmission(
 		)
 		buffer.Send(r)
 	}
+	logger.Debug("Grader.ProgressReport.Close")
 	g.onSubmissionFinished(req.SubmissionId)
 	buffer.Close()
 }

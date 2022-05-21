@@ -130,7 +130,7 @@ func (d *DockerProgrammingGrader) runDocker(
 	ctx context.Context, basePath string, submissionId uint64, submission *model_pb.Submission,
 	config *model_pb.ProgrammingAssignmentConfig, cpusetMems string, cpusetCpus string, containerIdCh chan string,
 	containerStartCh chan bool,
-) (internalError int64, exitCode int64, resultsJSONPath string, err error) {
+) (internalError int64, exitCode int64, resultsJSONPath string, deleteCallback func(), containerId string, err error) {
 	defer close(containerIdCh)
 	defer close(containerStartCh)
 
@@ -229,10 +229,10 @@ func (d *DockerProgrammingGrader) runDocker(
 		logger.Error("Docker.Run.CreateContainer", zap.Error(err))
 		return
 	}
-	containerId := body.ID
+	containerId = body.ID
 	logger = logger.With(zap.String("containerId", containerId))
 
-	defer d.RemoveContainerBackground(logger, containerId)
+	deleteCallback = func() { d.RemoveContainerBackground(logger, containerId) }
 	logger.Debug("Docker.Run.ContainerCreated")
 	containerIdCh <- containerId
 	doneC, errC := d.cli.ContainerWait(ctx, containerId, container.WaitConditionNextExit)
@@ -347,9 +347,12 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 			}
 		}
 	}()
-	internalError, exitCode, resultsJSONPath, err := d.runDocker(
+	internalError, exitCode, resultsJSONPath, deleteCallback, containerId, err := d.runDocker(
 		ctx, basePath, submissionId, submission, config, cpusetMems, cpusetCpus, containerIdCh, containerStartCh,
 	)
+	if deleteCallback != nil {
+		defer deleteCallback()
+	}
 	if err == context.Canceled {
 		briefPB.Status = model_pb.SubmissionStatus_Cancelled
 		notifyC <- &grader_pb.GradeReport{Brief: briefPB}
@@ -361,6 +364,7 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 		zap.String("resultsJSONPath", resultsJSONPath),
 	)
 	resultsPB := &model_pb.SubmissionReport{}
+	readOutput := false
 	var json []byte
 	var resultsJSON *os.File
 	if internalError == 0 {
@@ -368,6 +372,7 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 		if err != nil {
 			internalError = ErrOpenResultJSON
 			logger.Error("Result.Open", zap.Error(err))
+			readOutput = true
 			goto WriteReport
 		}
 		defer func(resultsJSON *os.File) {
@@ -380,12 +385,14 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 		if err != nil {
 			internalError = ErrReadResultJSON
 			logger.Error("Result.ReadAll", zap.Error(err))
+			readOutput = true
 			goto WriteReport
 		}
 		err = protojson.Unmarshal(json, resultsPB)
 		if err != nil {
 			internalError = ErrUnmarshalResultJSON
 			logger.Error("Result.Unmarshal", zap.Error(err))
+			readOutput = true
 			goto WriteReport
 		}
 		if resultsPB.GetScore() == 0 {
@@ -401,6 +408,18 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 		}
 	}
 WriteReport:
+	if readOutput {
+		r, err := d.cli.ContainerLogs(
+			ctx, containerId,
+			types.ContainerLogsOptions{Follow: false, Tail: "500", ShowStderr: false, ShowStdout: true},
+		)
+		if err == nil {
+			data, err := ioutil.ReadAll(r)
+			if err == nil {
+				resultsPB.Output = string(data)
+			}
+		}
+	}
 	resultsPB.InternalError = internalError
 	resultsPB.ExitCode = exitCode
 	briefPB = &model_pb.SubmissionBriefReport{
