@@ -417,6 +417,9 @@ WriteReport:
 			data, err := ioutil.ReadAll(r)
 			if err == nil {
 				resultsPB.Output = string(data)
+				if len(resultsPB.Output) > 500*1024 {
+					resultsPB.Output = resultsPB.Output[len(resultsPB.Output)-500*1024:]
+				}
 			}
 		}
 	}
