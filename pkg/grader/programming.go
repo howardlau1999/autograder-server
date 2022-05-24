@@ -365,7 +365,6 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 		zap.String("resultsJSONPath", resultsJSONPath),
 	)
 	resultsPB := &model_pb.SubmissionReport{}
-	readOutput := false
 	var json []byte
 	var resultsJSON *os.File
 	if internalError == 0 {
@@ -373,7 +372,6 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 		if err != nil {
 			internalError = ErrOpenResultJSON
 			logger.Error("Result.Open", zap.Error(err))
-			readOutput = true
 			goto WriteReport
 		}
 		defer func(resultsJSON *os.File) {
@@ -386,14 +384,12 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 		if err != nil {
 			internalError = ErrReadResultJSON
 			logger.Error("Result.ReadAll", zap.Error(err))
-			readOutput = true
 			goto WriteReport
 		}
 		err = protojson.Unmarshal(json, resultsPB)
 		if err != nil {
 			internalError = ErrUnmarshalResultJSON
 			logger.Error("Result.Unmarshal", zap.Error(err))
-			readOutput = true
 			goto WriteReport
 		}
 		if resultsPB.GetScore() == 0 {
@@ -409,29 +405,27 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 		}
 	}
 WriteReport:
-	if readOutput {
-		r, err := d.cli.ContainerLogs(
-			ctx, containerId,
-			types.ContainerLogsOptions{Follow: false, Tail: "500", ShowStderr: true, ShowStdout: true},
-		)
+	r, err := d.cli.ContainerLogs(
+		ctx, containerId,
+		types.ContainerLogsOptions{Follow: false, Tail: "300", ShowStderr: true, ShowStdout: true},
+	)
+	if err == nil {
+		pr, pw := io.Pipe()
+		go func() {
+			stdcopy.StdCopy(pw, pw, r)
+			pw.Close()
+		}()
+		data, err := ioutil.ReadAll(pr)
 		if err == nil {
-			pr, pw := io.Pipe()
-			go func() {
-				stdcopy.StdCopy(pw, pw, r)
-				pw.Close()
-			}()
-			data, err := ioutil.ReadAll(pr)
-			if err == nil {
-				resultsPB.Output = string(data)
-				if len(resultsPB.Output) > 500*1024 {
-					resultsPB.Output = resultsPB.Output[len(resultsPB.Output)-500*1024:]
-				}
-			} else {
-				logger.Error("Grader.ContainerLog.Read", zap.Error(err))
+			resultsPB.Output = string(data)
+			if len(resultsPB.Output) > 50*1024 {
+				resultsPB.Output = resultsPB.Output[len(resultsPB.Output)-50*1024:]
 			}
 		} else {
 			logger.Error("Grader.ContainerLog.Read", zap.Error(err))
 		}
+	} else {
+		logger.Error("Grader.ContainerLog.Read", zap.Error(err))
 	}
 	resultsPB.InternalError = internalError
 	resultsPB.ExitCode = exitCode
