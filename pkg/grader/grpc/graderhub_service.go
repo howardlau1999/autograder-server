@@ -759,14 +759,8 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 	for {
 		err = server.RecvMsg(r)
 		if err != nil {
-			brief := &model_pb.SubmissionBriefReport{
-				Status: model_pb.SubmissionStatus_Failed, InternalError: ErrGradeCallback,
-			}
-			report := &model_pb.SubmissionReport{InternalError: ErrGradeCallback}
-			g.submissionReportRepo.UpdateSubmissionBriefReport(context.Background(), submissionId, brief)
-			g.submissionReportRepo.UpdateSubmissionReport(context.Background(), submissionId, report)
-			g.sendGradeReport(submissionId, &grader_pb.GradeReport{Report: report, Brief: brief})
-			break
+			zap.L().Error("GraderCallback.Recv", zap.Error(err))
+			goto Out
 		}
 		submissionId = r.GetSubmissionId()
 		logger := zap.L().With(zap.Uint64("submissionId", submissionId))
@@ -793,6 +787,7 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 		}
 	}
 	g.onSubmissionFinished(submissionId)
+Out:
 	return nil
 }
 
