@@ -317,11 +317,11 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			logger.Error("Grader.FS.Remove", zap.String("file", runPath), zap.Error(err))
 		}
 	}(fmt.Sprintf("runs/submissions/%d", submissionId))
-	conn, client := g.getNewClient()
-	defer conn.Close()
 	for !buffer.closed || len(reports) > 0 {
+		conn, client := g.getNewClient()
 		rpCli, err := client.GradeCallback(context.Background())
 		if err != nil {
+			conn.Close()
 			logger.Error("Grader.StartGradeCallback", zap.Error(err))
 			if buffer.closed {
 				return
@@ -336,6 +336,7 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			if err != nil {
 				logger.Error("Grader.CloseGradeCallback", zap.Error(err))
 			}
+			conn.Close()
 			continue
 		}
 		for {
@@ -344,11 +345,12 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 				buffer.cond.Wait()
 			}
 			if buffer.closed && len(buffer.buffer) == 0 {
+				buffer.mu.Unlock()
 				err := rpCli.CloseSend()
 				if err != nil {
 					logger.Error("Grader.CloseGradeCallback", zap.Error(err))
 				}
-				buffer.mu.Unlock()
+				conn.Close()
 				return
 			}
 			reports = append(reports, buffer.buffer...)
@@ -360,10 +362,12 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 				if err != nil {
 					logger.Error("Grader.CloseGradeCallback", zap.Error(err))
 				}
+				conn.Close()
 				time.Sleep(1 * time.Second)
 				break
 			}
 		}
+		conn.Close()
 	}
 }
 
