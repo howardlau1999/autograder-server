@@ -463,7 +463,6 @@ func (g *GraderHubService) scheduler() {
 			}
 		}
 		// Requests are scheduled, wait for next event
-		g.schedulerCond.Wait()
 		g.queuedMu.Unlock()
 	}
 }
