@@ -432,6 +432,7 @@ func (g *GraderHubService) scheduler() {
 		for cur != nil {
 			// Try schedule one request
 			pending := cur.Value.(*PendingRequest)
+			cur = cur.Next()
 			g.onlineMu.Lock()
 			graderId := g.pickGrader(pending.request)
 			g.onlineMu.Unlock()
@@ -460,7 +461,6 @@ func (g *GraderHubService) scheduler() {
 				queue.cond.Signal()
 				queue.mu.Unlock()
 			}
-			cur = cur.Next()
 		}
 		// Requests are scheduled, wait for next event
 		g.schedulerCond.Wait()
@@ -759,13 +759,14 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 	for {
 		err = server.RecvMsg(r)
 		if err != nil {
-			zap.L().Error("GraderCallback.Recv", zap.Error(err))
+			zap.L().Error("GradeCallback.RecvMsg", zap.Error(err))
 			goto Out
 		}
 		submissionId = r.GetSubmissionId()
 		logger := zap.L().With(zap.Uint64("submissionId", submissionId))
 		report := r.GetReport()
 		if report.GetBrief() != nil {
+			logger.Debug("GradeCallback.UpdateBrief", zap.Stringer("brief", report.GetBrief()))
 			err = g.submissionReportRepo.UpdateSubmissionBriefReport(
 				context.Background(), submissionId, report.GetBrief(),
 			)
