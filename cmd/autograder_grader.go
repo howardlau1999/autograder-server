@@ -779,6 +779,10 @@ func (g *GraderWorker) WorkLoop() {
 							ctx := g.cancelChs[req.SubmissionId]
 							if ctx != nil {
 								ctx.cancel()
+							} else {
+								logger.Warn(
+									"Grader.CancelGrade.NotFound", zap.Uint64("submissionId", req.GetSubmissionId()),
+								)
 							}
 							delete(g.cancelChs, req.SubmissionId)
 							g.mu.Unlock()

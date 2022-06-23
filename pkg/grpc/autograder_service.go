@@ -1871,26 +1871,28 @@ func (a *AutograderService) ExportAssignmentGrades(
 		dbUser, _ := a.userRepo.GetUserById(ctx, userId)
 		submissions, err := a.getSubmissionHistory(ctx, userId, assignmentId)
 		if err != nil {
+			zap.L().Error(
+				"ExportAssignmentGrades.GetSubmissionHistory", zap.Uint64("userId", userId),
+				zap.Uint64("assignmentId", assignmentId), zap.Error(err),
+			)
 			continue
 		}
 
-		var submission *autograder_pb.SubmissionInfo
 		for _, sub := range submissions {
-			if submission == nil || sub.Score > submission.Score {
-				submission = sub
+			report, _ := a.submissionReportRepo.GetSubmissionReport(ctx, sub.GetSubmissionId())
+			entry := &autograder_pb.ExportAssignmentGradesResponse_Entry{
+				UserId:          userId,
+				Username:        dbUser.Username,
+				StudentId:       dbUser.StudentId,
+				Nickname:        dbUser.Nickname,
+				SubmissionCount: uint64(len(submissions)),
+				Score:           sub.GetScore(),
+				MaxScore:        sub.GetMaxScore(),
+				SubmissionId:    sub.GetSubmissionId(),
+				Leaderboard:     report.GetLeaderboard(),
 			}
+			entries = append(entries, entry)
 		}
-		entry := &autograder_pb.ExportAssignmentGradesResponse_Entry{
-			UserId:          userId,
-			Username:        dbUser.Username,
-			StudentId:       dbUser.StudentId,
-			Nickname:        dbUser.Nickname,
-			SubmissionCount: uint64(len(submissions)),
-			Score:           submission.GetScore(),
-			MaxScore:        submission.GetMaxScore(),
-			SubmissionId:    submission.GetSubmissionId(),
-		}
-		entries = append(entries, entry)
 	}
 	return &autograder_pb.ExportAssignmentGradesResponse{Entries: entries}, nil
 }
