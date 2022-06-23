@@ -796,7 +796,7 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 		if report.GetBrief() != nil || report.GetPendingRank() != nil || report.GetReport() != nil {
 			g.sendGradeReport(submissionId, report)
 		}
-		err = server.SendMsg(&grader_pb.GradeResponse{SubmissionId: submissionId})
+		err = server.SendMsg(&grader_pb.GradeCallbackResponse{})
 		if err != nil {
 			zap.L().Error("GradeCallback.SendMsg", zap.Error(err))
 			goto Out
@@ -809,7 +809,7 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 	}
 	g.onSubmissionFinished(submissionId)
 Out:
-	server.SendAndClose(nil)
+	server.SendAndClose(&grader_pb.GradeCallbackResponse{})
 	zap.L().Debug("GradeCallback.Exit", zap.Uint64("submissionId", submissionId))
 	return nil
 }

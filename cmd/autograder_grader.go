@@ -264,7 +264,8 @@ func (g *GraderWorker) sendReports(
 			logger.Error("Grader.GradeCallback.Send", zap.Error(err))
 			goto Out
 		}
-		err = rpCli.RecvMsg(gradeResponse)
+		gradeCallbackResponse := &grader_pb.GradeCallbackResponse{}
+		err = rpCli.RecvMsg(gradeCallbackResponse)
 		if err != nil {
 			logger.Error("Grader.GradeCallback.Recv", zap.Error(err))
 			goto Out
@@ -646,7 +647,7 @@ func (g *GraderWorker) getNewClient() (*grpc.ClientConn, grader_pb.GraderHubServ
 	keep := keepalive.ClientParameters{PermitWithoutStream: true, Time: 5 * time.Second, Timeout: 1 * time.Hour}
 	conn, err := grpc.Dial(
 		g.hubAddress,
-		grpc.WithWriteBufferSize(0),
+		grpc.WithBlock(),
 		grpc.WithKeepaliveParams(keep),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(
