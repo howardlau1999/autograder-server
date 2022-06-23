@@ -264,7 +264,7 @@ func (g *GraderWorker) sendReports(
 			logger.Error("Grader.GradeCallback.Send", zap.Error(err))
 			goto Out
 		}
-		err = rpCli.RecvMsg(&gradeResponse)
+		err = rpCli.RecvMsg(gradeResponse)
 		if err != nil {
 			logger.Error("Grader.GradeCallback.Recv", zap.Error(err))
 			goto Out
