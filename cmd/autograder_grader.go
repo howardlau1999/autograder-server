@@ -367,10 +367,6 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			if buffer.closed && len(buffer.buffer) == 0 {
 				buffer.mu.Unlock()
 				logger.Debug("Grader.SubmissionReporter.BufferClosed", zap.Uint64("submissionId", submissionId))
-				err := rpCli.CloseSend()
-				if err != nil {
-					logger.Error("Grader.CloseGradeCallback", zap.Error(err))
-				}
 				break
 			}
 			reports = append(reports, buffer.buffer...)
