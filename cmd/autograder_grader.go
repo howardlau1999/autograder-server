@@ -621,7 +621,7 @@ func (g *GraderWorker) gradeOneSubmission(
 }
 
 func (g *GraderWorker) getNewClient() (*grpc.ClientConn, grader_pb.GraderHubServiceClient) {
-	keep := keepalive.ClientParameters{PermitWithoutStream: true, Time: 5 * time.Second}
+	keep := keepalive.ClientParameters{PermitWithoutStream: true, Time: 5 * time.Second, Timeout: 1 * time.Hour}
 	conn, err := grpc.Dial(
 		g.hubAddress,
 		grpc.WithKeepaliveParams(keep),

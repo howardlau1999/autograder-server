@@ -356,7 +356,7 @@ func main() {
 		),
 	)
 	kaep := keepalive.EnforcementPolicy{PermitWithoutStream: true, MinTime: 1 * time.Second}
-	ksap := keepalive.ServerParameters{Time: 5 * time.Second}
+	ksap := keepalive.ServerParameters{Time: 5 * time.Second, Timeout: 1 * time.Hour}
 	graderHubServer := grpc.NewServer(
 		grpc.KeepaliveEnforcementPolicy(kaep),
 		grpc.KeepaliveParams(ksap),
