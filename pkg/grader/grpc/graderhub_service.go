@@ -793,7 +793,9 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 				logger.Error("GradeCallback.UpdateReport", zap.Error(err))
 			}
 		}
-		g.sendGradeReport(submissionId, report)
+		if report.GetBrief() != nil || report.GetPendingRank() != nil || report.GetReport() != nil {
+			g.sendGradeReport(submissionId, report)
+		}
 		if report.GetBrief().GetStatus() == model_pb.SubmissionStatus_Failed ||
 			report.GetBrief().GetStatus() == model_pb.SubmissionStatus_Finished ||
 			report.GetBrief().GetStatus() == model_pb.SubmissionStatus_Cancelled {
