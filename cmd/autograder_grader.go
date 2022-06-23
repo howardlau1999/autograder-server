@@ -319,7 +319,12 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 	}(fmt.Sprintf("runs/submissions/%d", submissionId))
 	for !buffer.closed || len(reports) > 0 {
 		conn, client := g.getNewClient()
-		rpCli, err := client.GradeCallback(context.Background())
+		ctx := context.Background()
+		ctx = metadata.AppendToOutgoingContext(
+			ctx, "submissionId", strconv.Itoa(int(submissionId)), "graderId",
+			strconv.Itoa(int(g.graderId)),
+		)
+		rpCli, err := client.GradeCallback(ctx)
 		if err != nil {
 			conn.Close()
 			logger.Error("Grader.StartGradeCallback", zap.Error(err))

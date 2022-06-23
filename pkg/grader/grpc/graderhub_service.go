@@ -755,6 +755,17 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 	r := &grader_pb.GradeResponse{}
 	var submissionId uint64
 	var err error
+	md, ok := metadata.FromIncomingContext(server.Context())
+	if !ok {
+		return nil
+	}
+	if g := md.Get("graderId"); len(g) != 0 {
+		graderIdStr := g[0]
+		submissionIdStr := md.Get("submissionId")[0]
+		zap.L().Debug(
+			"GradeCallback.Handshake", zap.String("submissionId", submissionIdStr), zap.String("graderId", graderIdStr),
+		)
+	}
 	for {
 		err = server.RecvMsg(r)
 		if err != nil {
