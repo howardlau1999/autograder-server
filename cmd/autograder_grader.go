@@ -257,9 +257,6 @@ func (g *GraderWorker) sendReports(
 			}
 			continue
 		}
-		if report.Report == nil && report.Brief == nil {
-			continue
-		}
 		submissionStatus := report.GetBrief().GetStatus()
 		gradeResponse := &grader_pb.GradeResponse{SubmissionId: submissionId, Report: report}
 		err := rpCli.Send(gradeResponse)
