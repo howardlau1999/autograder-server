@@ -462,6 +462,10 @@ func main() {
 		}
 	}()
 
+	go func() {
+		http.ListenAndServe(":54321", http.DefaultServeMux)
+	}()
+
 	port := viper.GetInt("web.port")
 	zap.L().Info("Web.Listen", zap.Int("port", port))
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), router); err != nil {
