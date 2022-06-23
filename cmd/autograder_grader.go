@@ -169,6 +169,7 @@ func (b *ReportBuffer) Send(report *grader_pb.GradeReport) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
+		zap.L().Warn("ReportBuffer.SendAfterClosed", zap.Stringer("report", report))
 		return
 	}
 	b.buffer = append(b.buffer, report)
@@ -205,8 +206,10 @@ func (g *GraderWorker) sendReports(
 ) error {
 	var i int
 	var err error
+	defer logger.Debug("Grader.SendReports.Exit", zap.Uint64("submissionId", submissionId))
 	for i = 0; i < len(*reports); i++ {
 		report := (*reports)[i]
+		logger.Debug("Grader.SendReport", zap.Stringer("brief", report.GetBrief()))
 		if report.GetDockerMetadata() != nil {
 			g.mu.Lock()
 			g.containerIds[report.GetDockerMetadata().GetSubmissionId()] = report.GetDockerMetadata().GetContainerId()
@@ -238,7 +241,6 @@ func (g *GraderWorker) sendReports(
 			)
 			if err != nil {
 				logger.Error("Grader.PutMetadata", zap.Error(err))
-				continue
 			}
 			continue
 		}
@@ -300,6 +302,7 @@ func (g *GraderWorker) sendReports(
 	}
 Out:
 	if i < len(*reports) {
+		logger.Error("Grader.SendReports.Remain", zap.Int("count", len(*reports)-i))
 		*reports = (*reports)[i:]
 	}
 	return err
@@ -351,6 +354,7 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			}
 			if buffer.closed && len(buffer.buffer) == 0 {
 				buffer.mu.Unlock()
+				logger.Debug("Grader.SubmissionReporter.BufferClosed", zap.Uint64("submissionId", submissionId))
 				err := rpCli.CloseSend()
 				if err != nil {
 					logger.Error("Grader.CloseGradeCallback", zap.Error(err))
