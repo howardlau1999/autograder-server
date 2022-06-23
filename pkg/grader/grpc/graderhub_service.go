@@ -772,6 +772,11 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 			zap.L().Error("GradeCallback.RecvMsg", zap.Error(err))
 			goto Out
 		}
+		err = server.SendMsg(nil)
+		if err != nil {
+			zap.L().Error("GradeCallback.SendMsg", zap.Error(err))
+			goto Out
+		}
 		submissionId = r.GetSubmissionId()
 		logger := zap.L().With(zap.Uint64("submissionId", submissionId))
 		report := r.GetReport()
@@ -804,6 +809,7 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 	}
 	g.onSubmissionFinished(submissionId)
 Out:
+	server.SendAndClose(nil)
 	zap.L().Debug("GradeCallback.Exit", zap.Uint64("submissionId", submissionId))
 	return nil
 }

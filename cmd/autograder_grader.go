@@ -264,6 +264,11 @@ func (g *GraderWorker) sendReports(
 			logger.Error("Grader.GradeCallback.Send", zap.Error(err))
 			goto Out
 		}
+		err = rpCli.RecvMsg(&gradeResponse)
+		if err != nil {
+			logger.Error("Grader.GradeCallback.Recv", zap.Error(err))
+			goto Out
+		}
 		if submissionStatus == model_pb.SubmissionStatus_Finished {
 			testcases := report.GetReport().GetTests()
 			wg := &sync.WaitGroup{}
@@ -366,6 +371,7 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			}
 			if buffer.closed && len(buffer.buffer) == 0 {
 				buffer.mu.Unlock()
+				rpCli.CloseAndRecv()
 				logger.Debug("Grader.SubmissionReporter.BufferClosed", zap.Uint64("submissionId", submissionId))
 				break
 			}
