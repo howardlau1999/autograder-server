@@ -324,7 +324,7 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 		Status: model_pb.SubmissionStatus_Running,
 	}
 	if notifyC != nil {
-		go func() { notifyC <- &grader_pb.GradeReport{Brief: briefPB} }()
+		notifyC <- &grader_pb.GradeReport{Brief: briefPB}
 	}
 	logger := GetGraderLogger(ctx).With(zap.Uint64("submissionId", submissionId))
 	containerIdCh := make(chan string)
