@@ -155,6 +155,19 @@ func NewReportBuffer() *ReportBuffer {
 		closed: false,
 	}
 	b.cond = sync.NewCond(b.mu)
+	go func() {
+		for {
+			b.mu.Lock()
+			if b.closed {
+				b.mu.Unlock()
+				return
+			}
+			b.buffer = append(b.buffer, &grader_pb.GradeReport{})
+			b.mu.Unlock()
+			b.cond.Broadcast()
+			time.Sleep(5 * time.Second)
+		}
+	}()
 	return b
 }
 
