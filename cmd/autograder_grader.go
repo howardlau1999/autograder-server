@@ -371,7 +371,7 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 				if err != nil {
 					logger.Error("Grader.CloseGradeCallback", zap.Error(err))
 				}
-				return
+				break
 			}
 			reports = append(reports, buffer.buffer...)
 			buffer.buffer = nil
