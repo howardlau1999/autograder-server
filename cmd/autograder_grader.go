@@ -264,12 +264,6 @@ func (g *GraderWorker) sendReports(
 			logger.Error("Grader.GradeCallback.Send", zap.Error(err))
 			goto Out
 		}
-		gradeCallbackResponse := &grader_pb.GradeCallbackResponse{}
-		err = rpCli.RecvMsg(gradeCallbackResponse)
-		if err != nil {
-			logger.Error("Grader.GradeCallback.Recv", zap.Error(err))
-			goto Out
-		}
 		if submissionStatus == model_pb.SubmissionStatus_Finished {
 			testcases := report.GetReport().GetTests()
 			wg := &sync.WaitGroup{}

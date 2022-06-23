@@ -796,11 +796,6 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 		if report.GetBrief() != nil || report.GetPendingRank() != nil || report.GetReport() != nil {
 			g.sendGradeReport(submissionId, report)
 		}
-		err = server.SendMsg(&grader_pb.GradeCallbackResponse{})
-		if err != nil {
-			zap.L().Error("GradeCallback.SendMsg", zap.Error(err))
-			goto Out
-		}
 		if report.GetBrief().GetStatus() == model_pb.SubmissionStatus_Failed ||
 			report.GetBrief().GetStatus() == model_pb.SubmissionStatus_Finished ||
 			report.GetBrief().GetStatus() == model_pb.SubmissionStatus_Cancelled {
