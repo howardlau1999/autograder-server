@@ -304,6 +304,8 @@ Out:
 	if i < len(*reports) {
 		logger.Error("Grader.SendReports.Remain", zap.Int("count", len(*reports)-i))
 		*reports = (*reports)[i:]
+	} else {
+		*reports = nil
 	}
 	return err
 }
