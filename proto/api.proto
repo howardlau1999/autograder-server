@@ -567,6 +567,7 @@ message ExportAssignmentGradesResponse {
     uint64 submission_count = 7;
     uint64 submission_id = 8;
     repeated LeaderboardItem leaderboard = 9;
+    google.protobuf.Timestamp submit_at = 10;
   }
   repeated Entry entries = 1;
 }

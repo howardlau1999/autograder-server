@@ -1890,6 +1890,7 @@ func (a *AutograderService) ExportAssignmentGrades(
 				MaxScore:        sub.GetMaxScore(),
 				SubmissionId:    sub.GetSubmissionId(),
 				Leaderboard:     report.GetLeaderboard(),
+				SubmitAt:        sub.GetSubmittedAt(),
 			}
 			entries = append(entries, entry)
 		}
