@@ -27,7 +27,7 @@ go build -tags containers_image_openpgp -o autograder-grader cmd/autograder_grad
 To build with the client-side webpage code, Node.js 16+ is needed.
 
 ```bash
-git submodule --update --init 
+git submodule update --init 
 npm install -g @angular/cli
 cd web
 npm install && npm install --no-save --ignore-scripts vcd-stream && ng build --output-path ../pkg/web/dist
