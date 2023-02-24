@@ -276,14 +276,14 @@ func processCommandLineOptions() bool {
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
+	if processCommandLineOptions() {
+		return
+	}
 	serverReadConfig()
 	zapLogger := logging.Init(
 		viper.GetString("log.level"), viper.GetString("log.file"), viper.GetBool("log.development"),
 	)
 	defer zapLogger.Sync()
-	if processCommandLineOptions() {
-		return
-	}
 	db, err := pebble.Open(viper.GetString("db.local.path"), &pebble.Options{Merger: repository.NewKVMerger()})
 	if err != nil {
 		zap.L().Fatal("DB.Open", zap.Error(err))
