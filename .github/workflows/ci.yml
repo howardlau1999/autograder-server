@@ -34,7 +34,7 @@ jobs:
       - run: zip -r autograder-web.zip pkg/web/dist
         if: steps.cache-web.outputs.cache-hit != 'true'
       - uses: appleboy/scp-action@master
-        if: steps.cache-web.outputs.cache-hit != 'true' && ${{ github.ref == 'refs/heads/master' }}
+        if: steps.cache-web.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           host: ${{ secrets.ALIYUN_HOST }}
           username: ${{ secrets.ALIYUN_USERNAME }}
@@ -83,7 +83,7 @@ jobs:
       - run: CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} GOARCH=${{ matrix.GOARCH }} go build -tags containers_image_openpgp -ldflags '-extldflags "-static"' -o autograder-grader-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }} cmd/autograder_grader.go
       - run: zip autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.zip autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }} autograder-grader-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }}
       - uses: appleboy/scp-action@master
-        if: ${{ github.ref == 'refs/heads/master' }}
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           host: ${{ secrets.ALIYUN_HOST }}
           username: ${{ secrets.ALIYUN_USERNAME }}
