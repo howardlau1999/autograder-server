@@ -1,8 +1,8 @@
 name: Build
 on:
-  - push
-  - release:
-      types: [ created ]
+  push:
+  release:
+    types: [ created ]
 
 jobs:
   build-web:
