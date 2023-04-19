@@ -28,6 +28,7 @@ import (
 	"autograder-server/pkg/repository"
 	"autograder-server/pkg/storage"
 	"autograder-server/pkg/utils"
+
 	"github.com/avast/retry-go"
 	"github.com/cockroachdb/pebble"
 	"github.com/go-chi/chi"
@@ -1365,8 +1366,19 @@ func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Re
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		data, err := a.ls.Open(r.Context(), payloadPB.GetRealPath())
+		if err != nil {
+			logger.Error("FileDownload.FS.Open", zap.Error(err))
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		w.Header().Add("Content-disposition", "attachment; filename="+fn)
-		http.ServeFile(w, r, payloadPB.GetRealPath())
+		w.WriteHeader(http.StatusOK)
+		_, err = io.Copy(w, data)
+		if err != nil {
+			logger.Error("FileDownload.FS.Copy", zap.Error(err))
+			return
+		}
 	} else {
 		submission, err := a.submissionRepo.GetSubmission(r.Context(), payloadPB.GetSubmissionId())
 		if err != nil {
