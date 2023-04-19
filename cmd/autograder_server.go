@@ -26,6 +26,7 @@ import (
 	"autograder-server/pkg/repository"
 	"autograder-server/pkg/storage"
 	"autograder-server/pkg/web"
+
 	"github.com/cockroachdb/pebble"
 	"github.com/go-chi/chi"
 	chiMiddleware "github.com/go-chi/chi/middleware"
@@ -455,7 +456,7 @@ func main() {
 		}
 	}
 	fileSrvRouter.Post("/*", verifyHTTPFSToken(autograderService.PushFile))
-	fileSrvRouter.Get("/*", verifyHTTPFSToken(http.FileServer(http.Dir(".")).ServeHTTP))
+	fileSrvRouter.Get("/*", verifyHTTPFSToken(http.FileServer(http.Dir(localStorageDir)).ServeHTTP))
 	go func() {
 		if err := http.ListenAndServe(fmt.Sprintf(":%d", httpFSPort), fileSrvRouter); err != nil {
 			zap.L().Fatal("HTTPFS.Serve", zap.Error(err))
