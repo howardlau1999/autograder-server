@@ -7,6 +7,8 @@ This repository contains the server-side code. For the web-based client-side cod
 
 For documentation, please head for [https://autograder-docs.howardlau.me](https://autograder-docs.howardlau.me)
 
+知乎文章介绍：[Autograder - 一个适合项目作业的评测系统](https://zhuanlan.zhihu.com/p/479027855)
+
 ## Build
 
 Go 1.17+ is needed for building the server.
