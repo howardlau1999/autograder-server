@@ -277,10 +277,10 @@ func processCommandLineOptions() bool {
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
+	serverReadConfig()
 	if processCommandLineOptions() {
 		return
 	}
-	serverReadConfig()
 	zapLogger := logging.Init(
 		viper.GetString("log.level"), viper.GetString("log.file"), viper.GetBool("log.development"),
 	)
