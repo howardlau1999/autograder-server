@@ -83,7 +83,7 @@ const SignUpSubject = "Autograder 注册验证码"
 const SignUpTemplate = "您的注册验证码为：%s，10 分钟内有效。\nAutograder"
 const SignUpRepoType = "sign_up"
 
-var UsernameRegExp = regexp.MustCompile("^[a-zA-Z][a-zA-Z0-9_-]{3,20}$")
+var UsernameRegExp = regexp.MustCompile("^[a-zA-Z0-9][a-zA-Z0-9_-]{3,20}$")
 var EmailCodeValidDuration = 10 * time.Minute
 
 func (a *AutograderService) sendEmailCode(to string, subject string, code string, template string) error {
