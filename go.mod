@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/cockroachdb/pebble v0.0.0-20220113024134-d4f0a8d4e985
-	github.com/docker/docker v20.10.24+incompatible
+	github.com/docker/docker v24.0.9+incompatible
 	github.com/go-chi/chi v1.5.4
 	github.com/go-chi/httprate v0.5.2
 	github.com/gogo/protobuf v1.3.2
