@@ -510,9 +510,15 @@ func main() {
 		}
 	}()
 
-	go func() {
-		http.ListenAndServe(":54321", http.DefaultServeMux)
-	}()
+	// The pprof debug endpoints are only exposed in development, bound to
+	// localhost, so they are never reachable in production.
+	if viper.GetBool("server.development") {
+		go func() {
+			if err := http.ListenAndServe("127.0.0.1:54321", http.DefaultServeMux); err != nil {
+				zap.L().Error("Pprof.Serve", zap.Error(err))
+			}
+		}()
+	}
 
 	port := viper.GetInt("web.port")
 	zap.L().Info("Web.Listen", zap.Int("port", port))

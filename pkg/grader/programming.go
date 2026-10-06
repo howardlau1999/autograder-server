@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	autograder_grpc "autograder-server/pkg/grader/grpc"
 	grader_pb "autograder-server/pkg/grader/proto"
@@ -84,12 +85,24 @@ type DockerProgrammingGrader struct {
 }
 
 func truncateOutput(output string, maxLen int, prompt string) string {
-	outputLen := len(output)
-	if outputLen <= maxLen {
+	if len(output) <= maxLen {
 		return output
 	}
 	halfLen := (maxLen - len(prompt)) / 2
-	return output[:halfLen] + prompt + output[outputLen-halfLen:]
+	if halfLen <= 0 {
+		return output[:maxLen]
+	}
+	// Back off each cut to a UTF-8 rune boundary so we never split a
+	// multi-byte character and emit invalid sequences.
+	head := halfLen
+	for head > 0 && !utf8.RuneStart(output[head]) {
+		head--
+	}
+	tail := len(output) - halfLen
+	for tail < len(output) && !utf8.RuneStart(output[tail]) {
+		tail++
+	}
+	return output[:head] + prompt + output[tail:]
 }
 
 func (d *DockerProgrammingGrader) StreamLog(ctx context.Context, containerId string) (io.ReadCloser, error) {

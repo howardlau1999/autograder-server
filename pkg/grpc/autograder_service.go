@@ -822,8 +822,11 @@ func (a *AutograderService) GetSubmissionReport(
 		return nil, status.Error(codes.NotFound, "CANCELLING")
 	}
 	report, err := a.submissionReportRepo.GetSubmissionReport(ctx, submissionId)
+	if err != nil {
+		return nil, status.Error(codes.NotFound, "REPORT_NOT_FOUND")
+	}
 	resp := &autograder_pb.GetSubmissionReportResponse{Report: report, Status: brief.GetStatus()}
-	return resp, err
+	return resp, nil
 }
 
 func (a *AutograderService) CreateManifest(
@@ -832,7 +835,7 @@ func (a *AutograderService) CreateManifest(
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	assignment := ctx.Value(assignmentCtxKey{}).(*model_pb.Assignment)
 	id, err := a.manifestRepo.CreateManifest(
-		nil, user.GetUserId(), request.GetAssignmentId(), assignment.GetUploadLimit(),
+		ctx, user.GetUserId(), request.GetAssignmentId(), assignment.GetUploadLimit(),
 	)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "CREATE_MANIFEST")
@@ -856,7 +859,7 @@ func (a *AutograderService) CreateSubmission(
 			return nil, status.Error(codes.Internal, "GET_SUBMISSIONS")
 		}
 		if submissionLimit.GetTotal() > 0 {
-			if len(submissionIds) > int(submissionLimit.GetTotal()) {
+			if len(submissionIds) >= int(submissionLimit.GetTotal()) {
 				return nil, status.Error(codes.ResourceExhausted, "SUBMISSION_LIMIT")
 			}
 		}
@@ -879,15 +882,39 @@ func (a *AutograderService) CreateSubmission(
 	}
 	manifestId := request.GetManifestId()
 	assignmentId := request.GetAssignmentId()
+	courseId := ctx.Value(courseIdCtxKey{}).(uint64)
 	submitters := request.GetSubmitters()
+	if len(submitters) == 0 {
+		submitters = []uint64{user.GetUserId()}
+	}
+	// Validate submitters: every submitter must be a member of the course, and
+	// a student may not submit without including themselves. This prevents
+	// recording submissions under arbitrary users and gaining read access to
+	// them via RequireSubmissionRead.
+	seen := map[uint64]bool{}
+	deduped := submitters[:0]
+	selfIncluded := false
+	for _, sid := range submitters {
+		if seen[sid] {
+			continue
+		}
+		seen[sid] = true
+		deduped = append(deduped, sid)
+		if sid == user.GetUserId() {
+			selfIncluded = true
+		}
+		if a.userRepo.GetCourseMember(ctx, sid, courseId) == nil {
+			return nil, status.Error(codes.InvalidArgument, "SUBMITTER_NOT_IN_COURSE")
+		}
+	}
+	submitters = deduped
+	if !selfIncluded && role != model_pb.CourseRole_TA && role != model_pb.CourseRole_Instructor {
+		return nil, status.Error(codes.PermissionDenied, "NOT_A_SUBMITTER")
+	}
 	submissionPath := a.getManifestPath(manifestId)
-	files, err := a.manifestRepo.GetFilesInManifest(nil, manifestId)
+	files, err := a.manifestRepo.GetFilesInManifest(ctx, manifestId)
 	if err != nil || len(files) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "MANIFEST_FILES")
-	}
-	err = a.manifestRepo.DeleteManifest(nil, manifestId)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "DELETE_MANIFEST")
 	}
 	submission := &model_pb.Submission{
 		AssignmentId:    assignmentId,
@@ -899,6 +926,9 @@ func (a *AutograderService) CreateSubmission(
 		UserId:          user.GetUserId(),
 	}
 	id, err := a.submissionRepo.CreateSubmission(ctx, submission)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "CREATE_SUBMISSION")
+	}
 	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Queued}
 	err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, id, brief)
 	if err != nil {
@@ -908,7 +938,7 @@ func (a *AutograderService) CreateSubmission(
 	if err != nil {
 		return nil, status.Error(codes.Internal, "MARK_UNFINISHED")
 	}
-	err = a.manifestRepo.DeleteManifest(nil, manifestId)
+	err = a.manifestRepo.DeleteManifest(ctx, manifestId)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "DELETE_MANIFEST")
 	}
@@ -1558,12 +1588,24 @@ func (a *AutograderService) GithubLogin(
 	if err != nil {
 		return nil, err
 	}
-	email := emails[0].GetEmail()
+	// Only trust verified emails for account matching, preferring the primary
+	// one. An unverified GitHub email must never be used to match or bind an
+	// existing account.
+	email := ""
 	for _, e := range emails {
+		if !e.GetVerified() {
+			continue
+		}
+		if email == "" {
+			email = e.GetEmail()
+		}
 		if e.GetPrimary() {
 			email = e.GetEmail()
 			break
 		}
+	}
+	if email == "" {
+		return nil, status.Error(codes.FailedPrecondition, "NO_VERIFIED_EMAIL")
 	}
 
 	user, userId, err = a.userRepo.GetUserByEmail(ctx, email)
@@ -1705,12 +1747,18 @@ func (a *AutograderService) UpdatePassword(
 func (a *AutograderService) JoinCourse(
 	ctx context.Context, request *autograder_pb.JoinCourseRequest,
 ) (*autograder_pb.JoinCourseResponse, error) {
-	courseId := utils.Base30Decode(request.GetJoinCode())
+	joinCode := request.GetJoinCode()
+	// Resolve the course via the join-code index; fall back to the legacy
+	// Base30 decoding for codes generated before the index existed.
+	courseId, err := a.courseRepo.GetCourseIdByJoinCode(ctx, joinCode)
+	if err != nil {
+		courseId = utils.Base30Decode(joinCode)
+	}
 	course, err := a.courseRepo.GetCourse(ctx, courseId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "INVALID_COURSE_ID")
 	}
-	if !course.AllowsJoin || course.GetJoinCode() != request.GetJoinCode() {
+	if !course.AllowsJoin || course.GetJoinCode() != joinCode {
 		return nil, status.Error(codes.InvalidArgument, "INVALID_JOIN_CODE")
 	}
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
@@ -1745,10 +1793,18 @@ func (a *AutograderService) GenerateJoinCode(
 		l.Error("GenerateJoinCode.GetCourse", zap.Error(err))
 		return nil, status.Error(codes.Internal, "GET_COURSE")
 	}
+	// Drop the previous code's index entry before rebinding the new one.
+	if old := course.GetJoinCode(); old != "" && old != code {
+		_ = a.courseRepo.UnbindJoinCode(ctx, old)
+	}
 	course.JoinCode = code
 	err = a.courseRepo.UpdateCourse(ctx, request.GetCourseId(), course)
 	if err != nil {
 		l.Error("GenerateJoinCode.UpdateCourse", zap.Error(err))
+		return nil, status.Error(codes.Internal, "UPDATE_COURSE")
+	}
+	if err := a.courseRepo.BindJoinCode(ctx, code, request.GetCourseId()); err != nil {
+		l.Error("GenerateJoinCode.BindJoinCode", zap.Error(err))
 		return nil, status.Error(codes.Internal, "UPDATE_COURSE")
 	}
 	return &autograder_pb.GenerateJoinCodeResponse{JoinCode: code}, nil
@@ -1991,8 +2047,14 @@ func (a *AutograderService) SetAdmin(
 	ctx context.Context, request *autograder_pb.SetAdminRequest,
 ) (*autograder_pb.SetAdminResponse, error) {
 	curUser := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
-	if curUser.GetUserId() == request.GetUserId() || request.GetUserId() == 1 {
-		return &autograder_pb.SetAdminResponse{}, nil
+	// Guard against an admin demoting themselves and against modifying the
+	// bootstrap root user (id 1). Report it explicitly instead of silently
+	// returning success so callers are not misled.
+	if curUser.GetUserId() == request.GetUserId() {
+		return nil, status.Error(codes.InvalidArgument, "CANNOT_MODIFY_SELF")
+	}
+	if request.GetUserId() == 1 {
+		return nil, status.Error(codes.InvalidArgument, "CANNOT_MODIFY_ROOT")
 	}
 	user, err := a.userRepo.GetUserById(ctx, request.GetUserId())
 	if err != nil {

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 
@@ -20,6 +21,9 @@ type CourseRepository interface {
 	GetAssignmentsByCourse(ctx context.Context, courseId uint64) ([]uint64, error)
 	UpdateCourse(ctx context.Context, courseId uint64, course *model_pb.Course) error
 	GetAllCourses(ctx context.Context) ([]*model_pb.Course, []uint64, error)
+	BindJoinCode(ctx context.Context, joinCode string, courseId uint64) error
+	UnbindJoinCode(ctx context.Context, joinCode string) error
+	GetCourseIdByJoinCode(ctx context.Context, joinCode string) (uint64, error)
 }
 
 type KVCourseRepository struct {
@@ -96,6 +100,24 @@ func (cr *KVCourseRepository) getIdKey(id uint64) []byte {
 
 func (cr *KVCourseRepository) getJoinCodeKey(joinCode string) []byte {
 	return []byte(fmt.Sprintf("course:join_code:%s", joinCode))
+}
+
+func (cr *KVCourseRepository) BindJoinCode(ctx context.Context, joinCode string, courseId uint64) error {
+	return cr.db.Set(cr.getJoinCodeKey(joinCode), Uint64ToBytes(courseId), pebble.Sync)
+}
+
+func (cr *KVCourseRepository) UnbindJoinCode(ctx context.Context, joinCode string) error {
+	return cr.db.Delete(cr.getJoinCodeKey(joinCode), pebble.Sync)
+}
+
+func (cr *KVCourseRepository) GetCourseIdByJoinCode(ctx context.Context, joinCode string) (uint64, error) {
+	raw, closer, err := cr.db.Get(cr.getJoinCodeKey(joinCode))
+	if err != nil {
+		return 0, err
+	}
+	id := binary.BigEndian.Uint64(raw)
+	closer.Close()
+	return id, nil
 }
 
 func (cr *KVCourseRepository) getUserPrefix(courseId uint64) []byte {

@@ -180,8 +180,10 @@ func (g *GraderHubService) onGraderOffline(graderId uint64) {
 		_ = g.graderRepo.ReleaseSubmission(context.Background(), subId)
 		g.runningMu.Lock()
 		if req := g.runningList[subId]; req != nil {
-			g.queueGradeRequest(req)
 			delete(g.runningList, subId)
+			if !g.isSubmissionTerminal(subId) {
+				g.queueGradeRequest(req)
+			}
 		}
 		g.runningMu.Unlock()
 	}
@@ -192,10 +194,29 @@ func (g *GraderHubService) onGraderOffline(graderId uint64) {
 			g.runningMu.Lock()
 			delete(g.runningList, req.SubmissionId)
 			g.runningMu.Unlock()
-			g.queueGradeRequest(req)
+			if !g.isSubmissionTerminal(req.SubmissionId) {
+				g.queueGradeRequest(req)
+			}
 		}
 		queue.requests = nil
 		queue.mu.Unlock()
+	}
+}
+
+// isSubmissionTerminal reports whether a submission has already reached a final
+// state, so a disconnecting grader does not cause it to be regraded.
+func (g *GraderHubService) isSubmissionTerminal(submissionId uint64) bool {
+	brief, err := g.submissionReportRepo.GetSubmissionBriefReport(context.Background(), submissionId)
+	if err != nil || brief == nil {
+		return false
+	}
+	switch brief.GetStatus() {
+	case model_pb.SubmissionStatus_Finished,
+		model_pb.SubmissionStatus_Failed,
+		model_pb.SubmissionStatus_Cancelled:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -716,13 +737,18 @@ func (g *GraderHubService) StreamLogCallback(server grader_pb.GraderHubService_S
 	if !ok {
 		return nil
 	}
-	graderIdStr := md.Get("graderId")[0]
+	graderIdVals := md.Get("graderId")
+	requestIdVals := md.Get("requestId")
+	if len(graderIdVals) == 0 || len(requestIdVals) == 0 {
+		return status.Error(codes.InvalidArgument, "METADATA")
+	}
+	graderIdStr := graderIdVals[0]
 	graderIdInt, err := strconv.Atoi(graderIdStr)
 	if err != nil {
 		return err
 	}
 	graderId := uint64(graderIdInt)
-	requestId := md.Get("requestId")[0]
+	requestId := requestIdVals[0]
 	g.logStreamMu.Lock()
 	client = g.logStreams[graderId][requestId]
 	g.logStreamMu.Unlock()
@@ -762,7 +788,10 @@ func (g *GraderHubService) GradeCallback(server grader_pb.GraderHubService_Grade
 	}
 	if g := md.Get("graderId"); len(g) != 0 {
 		graderIdStr := g[0]
-		submissionIdStr := md.Get("submissionId")[0]
+		submissionIdStr := ""
+		if s := md.Get("submissionId"); len(s) != 0 {
+			submissionIdStr = s[0]
+		}
 		zap.L().Debug(
 			"GradeCallback.Handshake", zap.String("submissionId", submissionIdStr), zap.String("graderId", graderIdStr),
 		)
