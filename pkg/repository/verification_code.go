@@ -44,6 +44,7 @@ func (vr *KVVerificationCodeRepository) GarbageCollect() {
 				}
 			}
 		}
+		_ = iter.Close()
 	}
 }
 

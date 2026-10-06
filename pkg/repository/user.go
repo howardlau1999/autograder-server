@@ -42,6 +42,7 @@ func (ur *KVUserRepository) GetAllUsers(ctx context.Context) ([]uint64, []*model
 	var ids []uint64
 	var users []*model_pb.User
 	iter := ur.db.NewIter(PrefixIterOptions(prefix))
+	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
 		idStr := iter.Key()[prefixLen:]
 		id, _ := strconv.Atoi(string(idStr))

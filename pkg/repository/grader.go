@@ -65,6 +65,7 @@ func (gr *KVGraderRepository) GetAllMetadata(ctx context.Context, graderId uint6
 	var keys [][]byte
 	var values [][]byte
 	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := iter.Key()[prefixLen:]
 		value := iter.Value()
@@ -85,6 +86,7 @@ func (gr *KVGraderRepository) getMetadataPrefix(graderId uint64) []byte {
 func (gr *KVGraderRepository) ClearRunning(ctx context.Context) {
 	prefix := []byte("running:")
 	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
 		gr.db.Delete(iter.Key(), pebble.Sync)
 	}
@@ -94,6 +96,7 @@ func (gr *KVGraderRepository) GetSubmissionsByGrader(ctx context.Context, grader
 	prefix := gr.getGraderSubmissionPrefix(graderId)
 	prefixLen := len(prefix)
 	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	defer iter.Close()
 	var submissions []uint64
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := iter.Key()
@@ -111,6 +114,7 @@ func (gr *KVGraderRepository) GetAllGraders(ctx context.Context) ([]uint64, []*m
 	prefix := gr.getGraderIdPrefix()
 	prefixLen := len(prefix)
 	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	defer iter.Close()
 	var ids []uint64
 	var graders []*model_pb.GraderStatusMetadata
 	for iter.First(); iter.Valid(); iter.Next() {

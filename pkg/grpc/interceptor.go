@@ -93,7 +93,7 @@ func (a *AutograderService) RequireLogin(ctx context.Context, req interface{}) (
 	if err != nil {
 		return nil, err
 	}
-	payload, err := a.parseTokenPayload(UserJWTSignKey, token)
+	payload, err := a.parseTokenPayload(a.userJWTSignKey, token)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "INVALID_TOKEN")
 	}
@@ -102,7 +102,7 @@ func (a *AutograderService) RequireLogin(ctx context.Context, req interface{}) (
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "INVALID_TOKEN")
 	}
-	ss, err := a.signPayloadToken(UserJWTSignKey, payloadPB, time.Now().Add(3*time.Hour))
+	ss, err := a.signPayloadToken(a.userJWTSignKey, payloadPB, time.Now().Add(3*time.Hour))
 	if err == nil {
 		refreshMD := metadata.Pairs("token", ss)
 		_ = grpc.SetHeader(ctx, refreshMD)

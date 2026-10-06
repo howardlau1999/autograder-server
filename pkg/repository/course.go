@@ -31,6 +31,7 @@ func (cr *KVCourseRepository) GetAllCourses(ctx context.Context) ([]*model_pb.Co
 	prefix := cr.getIdPrefix()
 	prefixLen := len(prefix)
 	iter := cr.db.NewIter(PrefixIterOptions(prefix))
+	defer iter.Close()
 	var courses []*model_pb.Course
 	var ids []uint64
 	for iter.First(); iter.Valid(); iter.Next() {

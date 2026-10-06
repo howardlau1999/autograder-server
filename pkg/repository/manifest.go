@@ -93,6 +93,7 @@ func (mr *KVManifestRepository) GarbageCollect(ctx context.Context, expired chan
 				expired <- manifestId
 			}
 		}
+		_ = iter.Close()
 	}
 }
 

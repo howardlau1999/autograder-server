@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -60,6 +61,11 @@ type ServerProvidedTokens struct {
 const initialConfig = `
 [server]
 	development=false
+
+[cors]
+	# Cross-origin requests are only accepted from these origins in production.
+	# Leave empty when the web client is served from the same origin.
+	allowed-origins=[]
 
 [smtp]
     addr=""
@@ -132,6 +138,9 @@ func dbInit(db *pebble.DB, email string) bool {
 	rootPassword := RandStringRunes(16)
 	userRepo := repository.NewKVUserRepository(db)
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(rootPassword), bcrypt.DefaultCost)
+	if err != nil {
+		panic(err)
+	}
 	rootUser := &model_pb.User{Username: "root", Password: passwordHash, Email: email, Nickname: "root", IsAdmin: true}
 	_, err = userRepo.CreateUser(context.Background(), rootUser)
 	if err != nil {
@@ -171,9 +180,6 @@ func serverReadConfig() {
 	viper.SetDefault("metrics.path", "/metrics")
 	viper.SetDefault("db.local.path", "db")
 	viper.SetDefault("server.development", false)
-	viper.SetDefault("token.secret.session", "user-session-token-secret")
-	viper.SetDefault("token.secret.upload", "upload-token-secret")
-	viper.SetDefault("token.secret.download", "download-token-secret")
 	viper.SetDefault("log.level", "info")
 	viper.SetDefault("log.file", "server.log")
 	viper.SetDefault("log.development", "false")
@@ -181,6 +187,37 @@ func serverReadConfig() {
 	err := viper.ReadInConfig()
 	if err != nil {
 		panic(err)
+	}
+}
+
+// insecureSecretDefaults holds the placeholder values shipped in the config
+// template. They must never be used in a running server.
+var insecureSecretDefaults = map[string]string{
+	"token.secret.session":  "user-session-token-secret",
+	"token.secret.upload":   "upload-token-secret",
+	"token.secret.download": "download-token-secret",
+}
+
+// validateSecrets aborts startup when any security-critical secret is empty or
+// still set to its shipped placeholder value, so the server fails closed rather
+// than signing tokens with a well-known key.
+func validateSecrets() {
+	for key, placeholder := range insecureSecretDefaults {
+		v := viper.GetString(key)
+		if v == "" || v == placeholder {
+			zap.L().Fatal(
+				"Config.Secret.Insecure", zap.String("key", key),
+				zap.String("hint", "set it to a strong, non-default value"),
+			)
+		}
+	}
+	for _, key := range []string{"hub.token", "fs.http.token"} {
+		if viper.GetString(key) == "" {
+			zap.L().Fatal(
+				"Config.Secret.Missing", zap.String("key", key),
+				zap.String("hint", "set it to a non-empty value"),
+			)
+		}
 	}
 }
 
@@ -285,6 +322,7 @@ func main() {
 		viper.GetString("log.level"), viper.GetString("log.file"), viper.GetBool("log.development"),
 	)
 	defer zapLogger.Sync()
+	validateSecrets()
 	db, err := pebble.Open(viper.GetString("db.local.path"), &pebble.Options{Merger: repository.NewKVMerger()})
 	if err != nil {
 		zap.L().Fatal("DB.Open", zap.Error(err))
@@ -326,11 +364,22 @@ func main() {
 		Endpoint:     github.Endpoint,
 	}
 
+	allowedOrigins := viper.GetStringSlice("cors.allowed-origins")
+	corsDevMode := viper.GetBool("server.development")
+	allowOrigin := func(origin string) bool {
+		for _, o := range allowedOrigins {
+			if o == origin {
+				return true
+			}
+		}
+		// In development reflect any origin for convenience; in production a
+		// cross-origin request must match the configured whitelist.
+		return corsDevMode
+	}
+
 	corsHandler := cors.New(
 		cors.Options{
-			AllowOriginFunc: func(origin string) bool {
-				return true
-			},
+			AllowOriginFunc:  allowOrigin,
 			AllowedHeaders:   []string{"Upload-token", "Download-token"},
 			ExposedHeaders:   nil,  // make sure that this is *nil*, otherwise the WebResponse overwrite will not work.
 			AllowCredentials: true, // always allow credentials, otherwise :authorization headers won't work
@@ -384,13 +433,10 @@ func main() {
 	autograder_pb.RegisterAutograderServiceServer(autograderServer, autograderService)
 	grader_pb.RegisterGraderHubServiceServer(graderHubServer, graderHubService)
 	wrappedGrpc := grpcweb.WrapServer(
-		autograderServer, grpcweb.WithOriginFunc(
-			func(origin string) bool {
-				return true
-			},
-		), grpcweb.WithWebsockets(true), grpcweb.WithWebsocketOriginFunc(
+		autograderServer, grpcweb.WithOriginFunc(allowOrigin),
+		grpcweb.WithWebsockets(true), grpcweb.WithWebsocketOriginFunc(
 			func(r *http.Request) bool {
-				return true
+				return allowOrigin(r.Header.Get("Origin"))
 			},
 		),
 	)
@@ -446,9 +492,10 @@ func main() {
 	zap.L().Info("HTTPFS.Listen", zap.Int("port", httpFSPort))
 	fileSrvRouter := chi.NewRouter()
 	verifyHTTPFSToken := func(next http.HandlerFunc) http.HandlerFunc {
+		expected := []byte(viper.GetString("fs.http.token"))
 		return func(w http.ResponseWriter, r *http.Request) {
-			token := r.Header.Get("token")
-			if token != viper.GetString("fs.http.token") {
+			token := []byte(r.Header.Get("token"))
+			if subtle.ConstantTimeCompare(token, expected) != 1 {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}

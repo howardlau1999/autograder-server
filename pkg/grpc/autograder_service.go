@@ -68,11 +68,11 @@ type AutograderService struct {
 	authFuncs            map[string][]MethodAuthFunc
 	githubOAuth2Config   *oauth2.Config
 	graderHubSvc         *grader_grpc.GraderHubService
+	userJWTSignKey       []byte
+	uploadJWTSignKey     []byte
+	downloadJWTSignKey   []byte
 }
 
-var DownloadJWTSignKey = []byte(viper.GetString("token.secret.download"))
-var UploadJWTSignKey = []byte(viper.GetString("token.secret.upload"))
-var UserJWTSignKey = []byte(viper.GetString("token.secret.session"))
 var ResetCodeMax = 900000
 
 const MaxMultipartFormParseMemory = 10 * 1024 * 1024
@@ -464,7 +464,7 @@ func (a *AutograderService) InitDownload(
 		payloadPB := &autograder_pb.DownloadTokenPayload{
 			RealPath: submission.GetPath(), Filename: fn, IsDirectory: true, SubmissionId: request.GetSubmissionId(),
 		}
-		ss, err := a.signPayloadToken(DownloadJWTSignKey, payloadPB, time.Now().Add(1*time.Minute))
+		ss, err := a.signPayloadToken(a.downloadJWTSignKey, payloadPB, time.Now().Add(1*time.Minute))
 		if err != nil {
 			return nil, status.Error(codes.Internal, "SIGN_JWT")
 		}
@@ -501,7 +501,7 @@ func (a *AutograderService) InitDownload(
 		fileTypePB = autograder_pb.DownloadFileType_Text
 	}
 	payloadPB := &autograder_pb.DownloadTokenPayload{RealPath: realpath, Filename: fn}
-	ss, err := a.signPayloadToken(DownloadJWTSignKey, payloadPB, time.Now().Add(1*time.Minute))
+	ss, err := a.signPayloadToken(a.downloadJWTSignKey, payloadPB, time.Now().Add(1*time.Minute))
 	if err != nil {
 		return nil, status.Error(codes.Internal, "SIGN_JWT")
 	}
@@ -977,7 +977,7 @@ func (a *AutograderService) InitUpload(
 	if isFilenameInvalid(filename) {
 		return nil, status.Error(codes.InvalidArgument, "INVALID_FILENAME")
 	}
-	key := UploadJWTSignKey
+	key := a.uploadJWTSignKey
 
 	payload := &autograder_pb.UploadTokenPayload{
 		ManifestId:  request.ManifestId,
@@ -1195,7 +1195,7 @@ func (a *AutograderService) signLoginToken(
 		Nickname: nickname,
 		IsAdmin:  isAdmin,
 	}
-	ss, err := a.signPayloadToken(UserJWTSignKey, payload, time.Now().Add(3*time.Hour))
+	ss, err := a.signPayloadToken(a.userJWTSignKey, payload, time.Now().Add(3*time.Hour))
 	if err != nil {
 		return err
 	}
@@ -1349,7 +1349,7 @@ func (a *AutograderService) parseTokenPayload(key []byte, tokenString string) ([
 func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Request) {
 	downloadTokenString := strings.TrimSpace(r.URL.Query().Get("token"))
 	fn := chi.URLParam(r, "filename")
-	payload, err := a.parseTokenPayload(DownloadJWTSignKey, downloadTokenString)
+	payload, err := a.parseTokenPayload(a.downloadJWTSignKey, downloadTokenString)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -1412,7 +1412,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 	var err error
 	normalizedContentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-type")))
 	uploadTokenString := strings.TrimSpace(r.Header.Get("Upload-token"))
-	payload, err := a.parseTokenPayload(UploadJWTSignKey, uploadTokenString)
+	payload, err := a.parseTokenPayload(a.uploadJWTSignKey, uploadTokenString)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -2069,6 +2069,9 @@ func NewAutograderServiceServer(
 		reportSubs:           make(map[uint64][]chan *grader_pb.GradeReport),
 		subsMu:               &sync.Mutex{},
 		graderHubSvc:         graderHubSvc,
+		userJWTSignKey:       []byte(viper.GetString("token.secret.session")),
+		uploadJWTSignKey:     []byte(viper.GetString("token.secret.upload")),
+		downloadJWTSignKey:   []byte(viper.GetString("token.secret.download")),
 	}
 	a.initAuthFuncs()
 	go a.runUnfinishedSubmissions()

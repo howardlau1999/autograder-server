@@ -27,6 +27,7 @@ func (lr *KVLeaderboardRepository) DeleteLeaderboardEntry(ctx context.Context, a
 	_ = lr.db.Delete(lr.getAssignmentUserKey(assignmentId, userId), pebble.Sync)
 	prefix := lr.getAssignmentPrefix(assignmentId)
 	iter := lr.db.NewIter(PrefixIterOptions(prefix))
+	defer iter.Close()
 	count := 0
 	for iter.First(); iter.Valid(); iter.Next() {
 		count++
@@ -60,6 +61,7 @@ func (lr *KVLeaderboardRepository) GetLeaderboard(
 ) ([]*model_pb.LeaderboardEntry, error) {
 	prefix := lr.getAssignmentPrefix(assignmentId)
 	iter := lr.db.NewIter(PrefixIterOptions(prefix))
+	defer iter.Close()
 	var entries []*model_pb.LeaderboardEntry
 	for iter.First(); iter.Valid(); iter.Next() {
 		raw := iter.Value()

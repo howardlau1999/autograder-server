@@ -3,6 +3,7 @@ package grpc
 import (
 	"container/list"
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -361,7 +362,7 @@ func (g *GraderHubService) GetAllMetadata(
 func (g *GraderHubService) RegisterGrader(
 	ctx context.Context, request *grader_pb.RegisterGraderRequest,
 ) (*grader_pb.RegisterGraderResponse, error) {
-	if request.GetToken() != g.token {
+	if subtle.ConstantTimeCompare([]byte(request.GetToken()), []byte(g.token)) != 1 {
 		return nil, status.Error(codes.PermissionDenied, "INVALID_TOKEN")
 	}
 	p, ok := peer.FromContext(ctx)

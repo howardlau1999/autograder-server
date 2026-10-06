@@ -178,6 +178,12 @@ func (b *ReportBuffer) Close() {
 	b.cond.Broadcast()
 }
 
+func (b *ReportBuffer) isClosed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.closed
+}
+
 func (b *ReportBuffer) Send(report *grader_pb.GradeReport) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -332,7 +338,7 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			logger.Error("Grader.FS.Remove", zap.String("file", runPath), zap.Error(err))
 		}
 	}(fmt.Sprintf("runs/submissions/%d", submissionId))
-	for !buffer.closed || len(reports) > 0 {
+	for !buffer.isClosed() || len(reports) > 0 {
 		conn, client := g.getNewClient()
 		ctx := context.Background()
 		ctx = metadata.AppendToOutgoingContext(
@@ -343,7 +349,7 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 		if err != nil {
 			conn.Close()
 			logger.Error("Grader.StartGradeCallback", zap.Error(err))
-			if buffer.closed {
+			if buffer.isClosed() {
 				return
 			}
 			time.Sleep(1 * time.Second)
