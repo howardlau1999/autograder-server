@@ -490,8 +490,8 @@ func (a *AutograderService) InitDownload(
 		return nil, status.Error(codes.Internal, "FILE_SIZE")
 	}
 	head := make([]byte, 512)
-	file.Read(head)
-	fileType := http.DetectContentType(head)
+	n, _ := io.ReadFull(file, head)
+	fileType := http.DetectContentType(head[:n])
 	fileTypePB := autograder_pb.DownloadFileType_Binary
 	if fileType == "application/pdf" {
 		fileTypePB = autograder_pb.DownloadFileType_PDF
@@ -1475,8 +1475,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	fileHeader := make([]byte, 512)
-	_, err = uploadFile.Read(fileHeader)
-	if err != nil {
+	if _, err = io.ReadFull(uploadFile, fileHeader); err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

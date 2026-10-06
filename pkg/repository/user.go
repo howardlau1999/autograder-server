@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strconv"
+	"sync"
 
 	model_pb "autograder-server/pkg/model/proto"
 	"github.com/cockroachdb/pebble"
@@ -32,8 +33,9 @@ type UserRepository interface {
 }
 
 type KVUserRepository struct {
-	db  *pebble.DB
-	seq Sequencer
+	db       *pebble.DB
+	seq      Sequencer
+	createMu sync.Mutex
 }
 
 func (ur *KVUserRepository) GetAllUsers(ctx context.Context) ([]uint64, []*model_pb.User, error) {
@@ -128,7 +130,7 @@ func (ur *KVUserRepository) getEmailKey(email string) []byte {
 }
 
 func (ur *KVUserRepository) getCoursePrefix(courseId uint64) []byte {
-	return append([]byte(fmt.Sprintf("user:courses:%d:", courseId)))
+	return []byte(fmt.Sprintf("user:courses:%d:", courseId))
 }
 
 func (ur *KVUserRepository) getCourseKey(userId uint64, courseId uint64) []byte {
@@ -205,13 +207,19 @@ func (ur *KVUserRepository) BindGithubId(ctx context.Context, userId uint64, git
 }
 
 func (ur *KVUserRepository) CreateUser(ctx context.Context, user *model_pb.User) (uint64, error) {
+	// Serialize creation so two concurrent sign-ups for the same username
+	// cannot both pass the existence check and clobber each other's indexes.
+	ur.createMu.Lock()
+	defer ur.createMu.Unlock()
 	user.CreatedAt = timestamppb.Now()
 	idBytes, closer, err := ur.db.Get(ur.getUsernameKey(user.Username))
 	if err != pebble.ErrNotFound {
-		if err == nil {
-			closer.Close()
+		if err != nil {
+			return 0, err
 		}
-		return binary.BigEndian.Uint64(idBytes), nil
+		id := binary.BigEndian.Uint64(idBytes)
+		closer.Close()
+		return id, nil
 	}
 	id, err := ur.seq.GetNextId()
 	if err != nil {
@@ -222,10 +230,19 @@ func (ur *KVUserRepository) CreateUser(ctx context.Context, user *model_pb.User)
 		return 0, err
 	}
 	batch := ur.db.NewBatch()
-	err = batch.Set(ur.getUserIdKey(id), raw, pebble.Sync)
-	err = batch.Set(ur.getUsernameKey(user.Username), Uint64ToBytes(id), pebble.Sync)
-	err = batch.Set(ur.getEmailKey(user.Email), Uint64ToBytes(id), pebble.Sync)
-	err = batch.Commit(pebble.Sync)
+	defer batch.Close()
+	if err = batch.Set(ur.getUserIdKey(id), raw, pebble.Sync); err != nil {
+		return 0, err
+	}
+	if err = batch.Set(ur.getUsernameKey(user.Username), Uint64ToBytes(id), pebble.Sync); err != nil {
+		return 0, err
+	}
+	if err = batch.Set(ur.getEmailKey(user.Email), Uint64ToBytes(id), pebble.Sync); err != nil {
+		return 0, err
+	}
+	if err = batch.Commit(pebble.Sync); err != nil {
+		return 0, err
+	}
 	return id, nil
 }
 

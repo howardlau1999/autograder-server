@@ -225,6 +225,11 @@ func (mr *KVManifestRepository) GetManifestFilesize(ctx context.Context, id uint
 	if !ok {
 		return 0, errors.New("not a counter")
 	}
+	// The counter is a signed accumulator; a transiently negative value must
+	// not wrap around to a huge uint64 and defeat the upload-limit check.
+	if counter.Counter < 0 {
+		return 0, nil
+	}
 	return uint64(counter.Counter), nil
 }
 
