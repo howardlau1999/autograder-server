@@ -166,6 +166,9 @@ func (mr *KVManifestRepository) DeleteFileInManifest(ctx context.Context, filena
 	}
 	b := mr.db.NewBatch()
 	mergeableBytes, err := proto.Marshal(&model_pb.Mergeable{MergeableOneof: &model_pb.Mergeable_Counter{Counter: -int64(metadata.GetFilesize())}})
+	if err != nil {
+		return 0, err
+	}
 	err = b.Merge(mr.getFilesizeKey(id), mergeableBytes, pebble.Sync)
 	if err != nil {
 		return 0, err
@@ -252,6 +255,9 @@ func (mr *KVManifestRepository) AddFileToManifest(
 		return 0, err
 	}
 	err = b.Merge(mr.getFilesizeKey(id), mergeableBytes, pebble.Sync)
+	if err != nil {
+		return 0, err
+	}
 	return 0, b.Commit(pebble.Sync)
 }
 

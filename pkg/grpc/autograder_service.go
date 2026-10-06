@@ -353,7 +353,7 @@ func (a *AutograderService) AddCourseMembers(
 			if len(newUsername) < 3 {
 				continue
 			}
-			existId, err := a.userRepo.GetUserIdByUsername(ctx, newUsername)
+			existId, _ := a.userRepo.GetUserIdByUsername(ctx, newUsername)
 			if existId != 0 {
 				continue
 			}
@@ -805,7 +805,7 @@ func (a *AutograderService) GetSubmissionReport(
 	ctx context.Context, request *autograder_pb.GetSubmissionReportRequest,
 ) (*autograder_pb.GetSubmissionReportResponse, error) {
 	submissionId := request.GetSubmissionId()
-	brief, err := a.submissionReportRepo.GetSubmissionBriefReport(ctx, submissionId)
+	brief, _ := a.submissionReportRepo.GetSubmissionBriefReport(ctx, submissionId)
 	if brief == nil {
 		return nil, status.Error(codes.NotFound, "NOT_FOUND")
 	}
@@ -1303,11 +1303,15 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 		logger.Error("RunSubmission.GetSubmission", zap.Error(err))
 		return
 	}
-	err = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, submissionId, assignmentId)
+	if err = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, submissionId, assignmentId); err != nil {
+		logger.Error("RunSubmission.MarkUnfinishedSubmission", zap.Error(err))
+	}
 	config := assignment.ProgrammingConfig
 	notifyC := make(chan *grader_pb.GradeReport)
 	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Queued}
-	err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, submissionId, brief)
+	if err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, submissionId, brief); err != nil {
+		logger.Error("RunSubmission.UpdateSubmissionBriefReport", zap.Error(err))
+	}
 	go a.progGrader.GradeSubmission(context.Background(), submissionId, submission, config, notifyC)
 	go func() {
 		for r := range notifyC {
@@ -1350,7 +1354,7 @@ func (a *AutograderService) parseTokenPayload(key []byte, tokenString string) ([
 	token, err := jwt.Parse(
 		tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected singning method: %v", token.Header["alg"])
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
 
 			return key, nil
@@ -1490,7 +1494,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	originalFile, err := a.manifestRepo.GetManifestFileMetadata(
+	originalFile, _ := a.manifestRepo.GetManifestFileMetadata(
 		r.Context(), payloadPB.GetFilename(), payloadPB.GetManifestId(),
 	)
 	if originalFile != nil {
@@ -1538,7 +1542,6 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	return
 }
 
 func (a *AutograderService) getGithubEmails(ctx context.Context, token *oauth2.Token) ([]*github.UserEmail, error) {
@@ -1575,7 +1578,7 @@ func (a *AutograderService) GithubLogin(
 	login := ghUser.GetLogin()
 	l.Debug("GithubLogin", zap.String("githubId", login))
 
-	user, userId, err := a.userRepo.GetUserByGithubId(ctx, login)
+	user, userId, _ := a.userRepo.GetUserByGithubId(ctx, login)
 	if user != nil {
 		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname, user.IsAdmin); err != nil {
 			return nil, err
@@ -1607,7 +1610,7 @@ func (a *AutograderService) GithubLogin(
 		return nil, status.Error(codes.FailedPrecondition, "NO_VERIFIED_EMAIL")
 	}
 
-	user, userId, err = a.userRepo.GetUserByEmail(ctx, email)
+	user, userId, _ = a.userRepo.GetUserByEmail(ctx, email)
 	if user != nil {
 		oldGithubId := user.GetGithubId()
 		if oldGithubId != "" && oldGithubId != login {
@@ -1622,7 +1625,7 @@ func (a *AutograderService) GithubLogin(
 		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
 	}
 
-	user, userId, err = a.userRepo.GetUserByUsername(ctx, login)
+	user, userId, _ = a.userRepo.GetUserByUsername(ctx, login)
 	if user != nil {
 		oldGithubId := user.GetGithubId()
 		if oldGithubId != "" && oldGithubId != login {
@@ -1687,7 +1690,7 @@ func (a *AutograderService) BindGithub(
 	if len(login) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "INVALID_GITHUB_LOGIN")
 	}
-	bindUserId, err := a.userRepo.GetUserIdByGithubId(ctx, login)
+	bindUserId, _ := a.userRepo.GetUserIdByGithubId(ctx, login)
 	if bindUserId != 0 {
 		return nil, status.Error(codes.AlreadyExists, "ALREADY_IN_USE")
 	}
@@ -2012,7 +2015,6 @@ func (a *AutograderService) PushFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	return
 }
 
 func (a *AutograderService) DeleteLeaderboard(

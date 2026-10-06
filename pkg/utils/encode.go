@@ -22,12 +22,12 @@ func Base30Encode(id uint64) string {
 	code := ""
 	const codeLen = 8
 	for id/dictLen != 0 {
-		idx := (id % dictLen) % dictLen
+		idx := id % dictLen
 		code += string(dictionary[idx])
 		id = id / dictLen
 	}
 
-	idx := (id % dictLen) % dictLen
+	idx := id % dictLen
 	code += string(dictionary[idx])
 
 	if len(code) < codeLen {

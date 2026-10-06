@@ -150,12 +150,6 @@ func (g *GraderHubService) pickGrader(request *grader_pb.GradeRequest) uint64 {
 	return 0
 }
 
-func (g *GraderHubService) onGraderUnknown(graderId uint64) {
-	g.onlineMu.Lock()
-	delete(g.onlineGraders, graderId)
-	g.onlineMu.Unlock()
-}
-
 func (g *GraderHubService) onGraderOffline(graderId uint64) {
 	g.onlineMu.Lock()
 	delete(g.onlineGraders, graderId)
@@ -530,7 +524,7 @@ func (g *GraderHubService) graderRequestSendLoop(
 			queue.mu.Unlock()
 			break
 		}
-		requests := make([]*grader_pb.GradeRequest, len(queue.requests), len(queue.requests))
+		requests := make([]*grader_pb.GradeRequest, len(queue.requests))
 		copy(requests, queue.requests)
 		queue.requests = nil
 		queue.mu.Unlock()

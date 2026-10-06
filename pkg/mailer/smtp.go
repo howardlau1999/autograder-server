@@ -58,7 +58,7 @@ func (s *SMTPMailer) sendMailTLS(from string, to []string, body []byte) error {
 }
 
 func (s *SMTPMailer) SendMail(from string, to []string, subject, content string) error {
-	msg := fmt.Sprintf("MIME-version: 1.0;\nContent-Type: text/plain; charset=\"UTF-8\";\r\n")
+	msg := "MIME-version: 1.0;\nContent-Type: text/plain; charset=\"UTF-8\";\r\n"
 	msg += fmt.Sprintf("From: %s\r\n", from)
 	msg += fmt.Sprintf("To: %s\r\n", strings.Join(to, ";"))
 	msg += fmt.Sprintf("Subject: %s\r\n", subject)

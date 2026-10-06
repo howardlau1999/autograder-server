@@ -313,7 +313,6 @@ func processCommandLineOptions() bool {
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
 	serverReadConfig()
 	if processCommandLineOptions() {
 		return

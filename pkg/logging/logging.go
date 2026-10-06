@@ -18,7 +18,6 @@ const (
 
 var (
 	globalLogger *zap.Logger
-	devMode      bool = false
 )
 
 func Sync() error {
@@ -26,7 +25,6 @@ func Sync() error {
 }
 
 func Init(logLevel string, logFile string, dev bool) *zap.Logger {
-	devMode = dev
 	var level zapcore.Level
 	switch logLevel {
 	case DebugLevelStr:

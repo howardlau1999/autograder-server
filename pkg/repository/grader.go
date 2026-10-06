@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"sync"
 
 	model_pb "autograder-server/pkg/model/proto"
 	"github.com/cockroachdb/pebble"
@@ -39,7 +38,6 @@ type GraderRepository interface {
 type KVGraderRepository struct {
 	db  *pebble.DB
 	seq Sequencer
-	mu  map[uint64]*sync.Mutex
 }
 
 func (gr *KVGraderRepository) DeleteMetadata(ctx context.Context, graderId uint64, key []byte) error {

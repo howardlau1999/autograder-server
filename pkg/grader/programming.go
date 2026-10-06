@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"os"
 	"path/filepath"
@@ -118,7 +117,7 @@ func (d *DockerProgrammingGrader) PullImage(image string) error {
 	if err != nil {
 		return err
 	}
-	_, err = ioutil.ReadAll(closer)
+	_, err = io.ReadAll(closer)
 	return err
 }
 
@@ -162,7 +161,7 @@ func (d *DockerProgrammingGrader) runDocker(
 		logger.Error("Docker.Run.PullImage", zap.Error(err))
 		return
 	}
-	pullProgressBuf := make([]byte, 32*1024, 32*1024)
+	pullProgressBuf := make([]byte, 32*1024)
 	var n int
 	for {
 		n, err = pullProgress.Read(pullProgressBuf)
@@ -393,7 +392,7 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 				logger.Error("Result.Close", zap.Error(err))
 			}
 		}(resultsJSON)
-		json, err = ioutil.ReadAll(resultsJSON)
+		json, err = io.ReadAll(resultsJSON)
 		if err != nil {
 			internalError = ErrReadResultJSON
 			logger.Error("Result.ReadAll", zap.Error(err))
@@ -428,7 +427,7 @@ WriteReport:
 			stdcopy.StdCopy(pw, pw, r)
 			pw.Close()
 		}()
-		data, err := ioutil.ReadAll(pr)
+		data, err := io.ReadAll(pr)
 		if err == nil {
 			resultsPB.Output = string(data)
 			if len(resultsPB.Output) > 50*1024 {
