@@ -66,13 +66,18 @@ func (h *HubGrader) GradeSubmission(
 		Submission:   submission,
 		Config:       config,
 	}
-	_, err := h.hubService.Grade(ctx, request)
-	if err != nil {
-		zap.L().Error("GraderHub.GradeSubmission", zap.Error(err))
+	if notifyC == nil {
+		h.hubService.EnqueueGrade(request)
+		return
 	}
-	if notifyC != nil {
-		h.hubService.SubscribeSubmission(submissionId, notifyC)
+	// Subscribe first so the queued/rank reports emitted while enqueueing are
+	// delivered rather than lost to a late subscriber.
+	mailbox := h.hubService.Subscribe(submissionId)
+	h.hubService.EnqueueGrade(request)
+	for r := range mailbox.Chan() {
+		notifyC <- r
 	}
+	close(notifyC)
 }
 
 type DockerProgrammingGrader struct {

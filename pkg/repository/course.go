@@ -69,6 +69,7 @@ func (cr *KVCourseRepository) GetAssignmentsByCourse(ctx context.Context, course
 func (cr *KVCourseRepository) GetUsersByCourse(ctx context.Context, courseId uint64) ([]*model_pb.CourseMember, error) {
 	prefix := cr.getUserPrefix(courseId)
 	iter := cr.db.NewIter(PrefixIterOptions(prefix))
+	defer iter.Close()
 	var members []*model_pb.CourseMember
 	for iter.First(); iter.Valid(); iter.Next() {
 		member := &model_pb.CourseMember{}
@@ -78,7 +79,6 @@ func (cr *KVCourseRepository) GetUsersByCourse(ctx context.Context, courseId uin
 		}
 		members = append(members, member)
 	}
-	iter.Close()
 	return members, nil
 }
 

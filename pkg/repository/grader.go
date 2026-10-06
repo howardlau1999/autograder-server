@@ -23,7 +23,6 @@ type GraderRepository interface {
 	GetGraderIdBySubmissionId(ctx context.Context, submissionId uint64) (uint64, error)
 	GetGraderBySubmissionId(ctx context.Context, submissionId uint64) (*model_pb.GraderStatusMetadata, uint64, error)
 	CreateGrader(ctx context.Context, name string, metadata *model_pb.GraderStatusMetadata) (uint64, error)
-	UpdateGraderStatus(ctx context.Context, graderId uint64, status model_pb.GraderStatusMetadata_Status) error
 	UpdateGrader(ctx context.Context, graderId uint64, grader *model_pb.GraderStatusMetadata) error
 	DeleteGrader(ctx context.Context, graderId uint64) error
 	GetAllGraders(ctx context.Context) ([]uint64, []*model_pb.GraderStatusMetadata, error)
@@ -270,13 +269,6 @@ func (gr *KVGraderRepository) CreateGrader(
 		return 0, err
 	}
 	return id, nil
-}
-
-func (gr *KVGraderRepository) UpdateGraderStatus(
-	ctx context.Context, graderId uint64, status model_pb.GraderStatusMetadata_Status,
-) error {
-	//TODO implement me
-	panic("implement me")
 }
 
 func (gr *KVGraderRepository) DeleteGrader(ctx context.Context, graderId uint64) error {

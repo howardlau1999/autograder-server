@@ -93,6 +93,7 @@ func (ur *KVUserRepository) GetCoursesByUser(ctx context.Context, userId uint64)
 	var courses []*model_pb.CourseMember
 	prefix := ur.getCoursePrefix(userId)
 	iter := ur.db.NewIter(PrefixIterOptions(prefix))
+	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
 		course := &model_pb.CourseMember{}
 		err := proto.Unmarshal(iter.Value(), course)
@@ -101,7 +102,6 @@ func (ur *KVUserRepository) GetCoursesByUser(ctx context.Context, userId uint64)
 		}
 		courses = append(courses, course)
 	}
-	iter.Close()
 	return courses, nil
 }
 

@@ -16,13 +16,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	autograder_pb "autograder-server/pkg/api/proto"
 	"autograder-server/pkg/grader"
 	grader_grpc "autograder-server/pkg/grader/grpc"
-	grader_pb "autograder-server/pkg/grader/proto"
 	"autograder-server/pkg/mailer"
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/repository"
@@ -63,8 +61,6 @@ type AutograderService struct {
 	mailer               mailer.Mailer
 	ls                   *storage.LocalStorage
 	captchaVerifier      *hcaptcha.Client
-	reportSubs           map[uint64][]chan *grader_pb.GradeReport
-	subsMu               *sync.Mutex
 	authFuncs            map[string][]MethodAuthFunc
 	githubOAuth2Config   *oauth2.Config
 	graderHubSvc         *grader_grpc.GraderHubService
@@ -844,72 +840,94 @@ func (a *AutograderService) CreateManifest(
 	return resp, nil
 }
 
+// validateSubmitters returns the de-duplicated submitter set for a new
+// submission. Every submitter must be a member of the course and, unless the
+// caller is staff, the caller must be among them: otherwise a submission could
+// be recorded under arbitrary users and grant the caller read access to it via
+// RequireSubmissionRead. An empty list means "just the caller".
+func (a *AutograderService) validateSubmitters(
+	ctx context.Context, requested []uint64, callerId, courseId uint64, staff bool,
+) ([]uint64, error) {
+	if len(requested) == 0 {
+		requested = []uint64{callerId}
+	}
+	seen := make(map[uint64]bool, len(requested))
+	submitters := make([]uint64, 0, len(requested))
+	selfIncluded := false
+	for _, sid := range requested {
+		if seen[sid] {
+			continue
+		}
+		seen[sid] = true
+		if sid == callerId {
+			selfIncluded = true
+		}
+		if a.userRepo.GetCourseMember(ctx, sid, courseId) == nil {
+			return nil, status.Error(codes.InvalidArgument, "SUBMITTER_NOT_IN_COURSE")
+		}
+		submitters = append(submitters, sid)
+	}
+	if !selfIncluded && !staff {
+		return nil, status.Error(codes.PermissionDenied, "NOT_A_SUBMITTER")
+	}
+	return submitters, nil
+}
+
+// checkSubmissionLimit enforces the assignment's total and sliding-window
+// submission limits for one submitter. The check runs before the new
+// submission is created, so reaching the limit (>=) already means rejection.
+func (a *AutograderService) checkSubmissionLimit(
+	ctx context.Context, userId, assignmentId uint64, limit *model_pb.SubmissionLimitConfig,
+) error {
+	submissionIds, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(ctx, userId, assignmentId)
+	if err != nil {
+		return status.Error(codes.Internal, "GET_SUBMISSIONS")
+	}
+	if limit.GetTotal() > 0 && uint64(len(submissionIds)) >= limit.GetTotal() {
+		return status.Error(codes.ResourceExhausted, "SUBMISSION_LIMIT")
+	}
+	if limit.GetFrequency() > 0 && limit.GetPeriod() > 0 {
+		windowCount := uint64(0)
+		windowStart := time.Now().Add(-time.Minute * time.Duration(limit.GetPeriod()))
+		for _, subId := range submissionIds {
+			sub, err := a.submissionRepo.GetSubmission(ctx, subId)
+			if err != nil {
+				return status.Error(codes.Internal, "GET_SUBMISSION")
+			}
+			if sub.GetSubmittedAt().AsTime().After(windowStart) {
+				windowCount++
+			}
+		}
+		if windowCount >= limit.GetFrequency() {
+			return status.Error(codes.ResourceExhausted, "SUBMISSION_FREQUENCY")
+		}
+	}
+	return nil
+}
+
 func (a *AutograderService) CreateSubmission(
 	ctx context.Context, request *autograder_pb.CreateSubmissionRequest,
 ) (*autograder_pb.CreateSubmissionResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	role := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember).Role
 	assignment := ctx.Value(assignmentCtxKey{}).(*model_pb.Assignment)
-	submissionLimit := assignment.GetSubmissionLimit()
-	if submissionLimit != nil && role != model_pb.CourseRole_Instructor && role != model_pb.CourseRole_TA {
-		submissionIds, err := a.submissionRepo.GetSubmissionsByUserAndAssignment(
-			ctx, user.GetUserId(), request.GetAssignmentId(),
-		)
-		if err != nil {
-			return nil, status.Error(codes.Internal, "GET_SUBMISSIONS")
-		}
-		if submissionLimit.GetTotal() > 0 {
-			if len(submissionIds) >= int(submissionLimit.GetTotal()) {
-				return nil, status.Error(codes.ResourceExhausted, "SUBMISSION_LIMIT")
-			}
-		}
-		if submissionLimit.GetFrequency() > 0 && submissionLimit.GetPeriod() > 0 {
-			windowCount := 0
-			windowLimit := time.Now().Add(-time.Minute * time.Duration(submissionLimit.GetPeriod()))
-			for _, subId := range submissionIds {
-				sub, err := a.submissionRepo.GetSubmission(ctx, subId)
-				if err != nil {
-					return nil, status.Error(codes.Internal, "GET_SUBMISSION")
-				}
-				if sub.GetSubmittedAt().AsTime().After(windowLimit) {
-					windowCount += 1
-				}
-			}
-			if windowCount >= int(submissionLimit.GetFrequency()) {
-				return nil, status.Error(codes.ResourceExhausted, "SUBMISSION_FREQUENCY")
-			}
-		}
-	}
 	manifestId := request.GetManifestId()
 	assignmentId := request.GetAssignmentId()
 	courseId := ctx.Value(courseIdCtxKey{}).(uint64)
-	submitters := request.GetSubmitters()
-	if len(submitters) == 0 {
-		submitters = []uint64{user.GetUserId()}
+	staff := role == model_pb.CourseRole_Instructor || role == model_pb.CourseRole_TA
+
+	submitters, err := a.validateSubmitters(ctx, request.GetSubmitters(), user.GetUserId(), courseId, staff)
+	if err != nil {
+		return nil, err
 	}
-	// Validate submitters: every submitter must be a member of the course, and
-	// a student may not submit without including themselves. This prevents
-	// recording submissions under arbitrary users and gaining read access to
-	// them via RequireSubmissionRead.
-	seen := map[uint64]bool{}
-	deduped := submitters[:0]
-	selfIncluded := false
-	for _, sid := range submitters {
-		if seen[sid] {
-			continue
+	// Limits are enforced per submitter over the validated set, so a group
+	// cannot bypass them by rotating who is listed first.
+	if limit := assignment.GetSubmissionLimit(); limit != nil && !staff {
+		for _, sid := range submitters {
+			if err := a.checkSubmissionLimit(ctx, sid, assignmentId, limit); err != nil {
+				return nil, err
+			}
 		}
-		seen[sid] = true
-		deduped = append(deduped, sid)
-		if sid == user.GetUserId() {
-			selfIncluded = true
-		}
-		if a.userRepo.GetCourseMember(ctx, sid, courseId) == nil {
-			return nil, status.Error(codes.InvalidArgument, "SUBMITTER_NOT_IN_COURSE")
-		}
-	}
-	submitters = deduped
-	if !selfIncluded && role != model_pb.CourseRole_TA && role != model_pb.CourseRole_Instructor {
-		return nil, status.Error(codes.PermissionDenied, "NOT_A_SUBMITTER")
 	}
 	submissionPath := a.getManifestPath(manifestId)
 	files, err := a.manifestRepo.GetFilesInManifest(ctx, manifestId)
@@ -929,22 +947,23 @@ func (a *AutograderService) CreateSubmission(
 	if err != nil {
 		return nil, status.Error(codes.Internal, "CREATE_SUBMISSION")
 	}
+	// Persist the queued brief before returning so a client that subscribes
+	// the moment this call returns sees "queued" rather than "not found";
+	// runSubmission (async) takes care of the unfinished marker.
 	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Queued}
-	err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, id, brief)
-	if err != nil {
+	if err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, id, brief); err != nil {
 		return nil, status.Error(codes.Internal, "UPDATE_BRIEF")
 	}
-	err = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, id, assignmentId)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "MARK_UNFINISHED")
-	}
-	err = a.manifestRepo.DeleteManifest(ctx, manifestId)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "DELETE_MANIFEST")
+	// From here on the submission exists and will be graded. The remaining
+	// steps are cleanup; failing them must not report an error to the client,
+	// which would suggest the submission was not accepted.
+	l := ctxzap.Extract(ctx).With(zap.Uint64("submissionId", id), zap.Uint64("manifestId", manifestId))
+	if err = a.manifestRepo.DeleteManifest(ctx, manifestId); err != nil {
+		l.Error("CreateSubmission.DeleteManifest", zap.Error(err))
 	}
 	err = a.ls.Put(ctx, filepath.Join(submissionPath, ".submission"), strings.NewReader(fmt.Sprintf("%d", id)))
 	if err != nil {
-		return nil, status.Error(codes.Internal, "CREATE_MARKER")
+		l.Error("CreateSubmission.CreateMarker", zap.Error(err))
 	}
 	resp := &autograder_pb.CreateSubmissionResponse{SubmissionId: id, Files: files}
 	go a.runSubmission(context.Background(), id, assignmentId)
@@ -1026,39 +1045,21 @@ func (a *AutograderService) InitUpload(
 func (a *AutograderService) SubscribeSubmission(
 	request *autograder_pb.SubscribeSubmissionRequest, server autograder_pb.AutograderService_SubscribeSubmissionServer,
 ) error {
-	_, err := a.AuthFunc(server.Context(), request, "/AutograderService/SubscribeSubmission")
+	ctx, err := a.AuthFunc(server.Context(), request, "/AutograderService/SubscribeSubmission")
 	if err != nil {
 		return err
 	}
-	c := make(chan *grader_pb.GradeReport)
 	id := request.GetSubmissionId()
-	l := ctxzap.Extract(server.Context()).With(zap.Uint64("submissionId", id))
-	a.subsMu.Lock()
-	brief, err := a.submissionReportRepo.GetSubmissionBriefReport(server.Context(), id)
+	l := ctxzap.Extract(ctx).With(zap.Uint64("submissionId", id))
+	// Subscribe before reading the brief so a status change between the read
+	// and the subscription is still delivered.
+	mailbox := a.graderHubSvc.Subscribe(id)
+	defer a.graderHubSvc.Unsubscribe(id, mailbox)
+	brief, err := a.submissionReportRepo.GetSubmissionBriefReport(ctx, id)
 	if err != nil && err != pebble.ErrNotFound {
 		l.Error("SubscribeSubmission.GetBrief", zap.Error(err))
-		a.subsMu.Unlock()
 		return status.Error(codes.Internal, "GET_BRIEF")
 	}
-	if err == nil &&
-		brief.GetStatus() != model_pb.SubmissionStatus_Running &&
-		brief.GetStatus() != model_pb.SubmissionStatus_Queued &&
-		brief.GetStatus() != model_pb.SubmissionStatus_Cancelled {
-		a.subsMu.Unlock()
-		return server.Send(
-			&autograder_pb.SubscribeSubmissionResponse{
-				Score:    brief.GetScore(),
-				MaxScore: brief.GetMaxScore(),
-				Status:   brief.GetStatus(),
-			},
-		)
-	}
-	var idx int
-	l.Debug("SubscribeSubmission.Begin")
-	a.reportSubs[id] = append(a.reportSubs[id], c)
-	idx = len(a.reportSubs[id]) - 1
-	a.subsMu.Unlock()
-	brief, _ = a.submissionReportRepo.GetSubmissionBriefReport(server.Context(), id)
 	rank, total := a.graderHubSvc.GetPendingRank(id)
 	err = server.Send(
 		&autograder_pb.SubscribeSubmissionResponse{
@@ -1069,30 +1070,56 @@ func (a *AutograderService) SubscribeSubmission(
 	if err != nil {
 		return err
 	}
+	if err == nil && isTerminalStatus(brief.GetStatus()) {
+		return nil
+	}
+	l.Debug("SubscribeSubmission.Begin")
 	for {
 		select {
-		case <-server.Context().Done():
-			a.subsMu.Lock()
-			if len(a.reportSubs[id]) > idx {
-				a.reportSubs[id][idx] = nil
-			}
-			a.subsMu.Unlock()
+		case <-ctx.Done():
 			return nil
-		case r := <-c:
-			err := server.Send(
-				&autograder_pb.SubscribeSubmissionResponse{
-					Score:       r.GetBrief().GetScore(),
-					MaxScore:    r.GetBrief().GetMaxScore(),
-					Status:      r.GetBrief().GetStatus(),
-					PendingRank: r.GetPendingRank(),
-				},
-			)
-			if r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Failed ||
-				r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Finished {
+		case r, ok := <-mailbox.Chan():
+			if !ok {
+				// The hub closed the subscription: the submission finished and
+				// its final brief is already persisted. Send that as the last
+				// message so the client always observes the terminal state.
+				final, err := a.submissionReportRepo.GetSubmissionBriefReport(ctx, id)
+				if err != nil {
+					return nil
+				}
+				return server.Send(
+					&autograder_pb.SubscribeSubmissionResponse{
+						Score: final.GetScore(), MaxScore: final.GetMaxScore(), Status: final.GetStatus(),
+					},
+				)
+			}
+			if r.GetBrief() == nil && r.GetPendingRank() == nil {
+				continue
+			}
+			resp := &autograder_pb.SubscribeSubmissionResponse{PendingRank: r.GetPendingRank()}
+			if r.GetBrief() != nil {
+				resp.Score = r.GetBrief().GetScore()
+				resp.MaxScore = r.GetBrief().GetMaxScore()
+				resp.Status = r.GetBrief().GetStatus()
+			} else {
+				// A rank-only update carries no brief; the submission is by
+				// definition still queued.
+				resp.Status = model_pb.SubmissionStatus_Queued
+			}
+			if err := server.Send(resp); err != nil {
 				return err
+			}
+			if r.GetBrief() != nil && isTerminalStatus(r.GetBrief().GetStatus()) {
+				return nil
 			}
 		}
 	}
+}
+
+func isTerminalStatus(s model_pb.SubmissionStatus) bool {
+	return s == model_pb.SubmissionStatus_Finished ||
+		s == model_pb.SubmissionStatus_Failed ||
+		s == model_pb.SubmissionStatus_Cancelled
 }
 
 func (a *AutograderService) getSubmissionHistory(
@@ -1306,39 +1333,24 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 	if err = a.submissionReportRepo.MarkUnfinishedSubmission(ctx, submissionId, assignmentId); err != nil {
 		logger.Error("RunSubmission.MarkUnfinishedSubmission", zap.Error(err))
 	}
-	config := assignment.ProgrammingConfig
-	notifyC := make(chan *grader_pb.GradeReport)
 	brief := &model_pb.SubmissionBriefReport{Status: model_pb.SubmissionStatus_Queued}
 	if err = a.submissionReportRepo.UpdateSubmissionBriefReport(ctx, submissionId, brief); err != nil {
 		logger.Error("RunSubmission.UpdateSubmissionBriefReport", zap.Error(err))
 	}
-	go a.progGrader.GradeSubmission(context.Background(), submissionId, submission, config, notifyC)
-	go func() {
-		for r := range notifyC {
-			a.subsMu.Lock()
-			for _, sub := range a.reportSubs[submissionId] {
-				if sub != nil {
-					sub <- r
-				}
-			}
-			if r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Finished ||
-				r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Failed ||
-				r.GetBrief().GetStatus() == model_pb.SubmissionStatus_Cancelled {
-				logger.Debug("RunSubmission.Finished")
-				delete(a.reportSubs, submissionId)
-				a.subsMu.Unlock()
-				return
-			}
-			a.subsMu.Unlock()
-		}
-	}()
+	// Progress is delivered to clients by the hub's own subscription registry
+	// (see SubscribeSubmission), so no notification channel is needed here.
+	a.progGrader.GradeSubmission(context.Background(), submissionId, submission, assignment.ProgrammingConfig, nil)
 }
 
 func (a *AutograderService) runUnfinishedSubmissions() {
 	ctx := context.Background()
 	ids, err := a.submissionReportRepo.GetUnfinishedSubmissions(ctx)
 	if err != nil {
-		panic(err)
+		// This runs in a background goroutine with no recover above it, so a
+		// panic would take the whole server down. Log and skip recovery of
+		// in-flight submissions instead.
+		zap.L().Error("RunUnfinishedSubmissions.Get", zap.Error(err))
+		return
 	}
 	for _, id := range ids {
 		asgnId := id.AssignmentId
@@ -1406,6 +1418,7 @@ func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Re
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		defer data.Close()
 		w.Header().Add("Content-disposition", "attachment; filename="+fn)
 		w.WriteHeader(http.StatusOK)
 		_, err = io.Copy(w, data)
@@ -1419,21 +1432,35 @@ func (a *AutograderService) HandleFileDownload(w http.ResponseWriter, r *http.Re
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		w.Header().Add("Content-disposition", "attachment; filename="+fn)
-		zw := zip.NewWriter(w)
-		defer zw.Close()
+		// Open every file before writing any response body: once the zip stream
+		// starts the client has already received 200 and the zip header, so a
+		// mid-stream Open failure can only hand back a truncated archive. Opening
+		// up front lets us fail with a clean error status instead.
+		readers := make([]io.ReadCloser, 0, len(submission.Files))
+		defer func() {
+			for _, rc := range readers {
+				rc.Close()
+			}
+		}()
 		for _, f := range submission.Files {
 			data, err := a.ls.Open(r.Context(), filepath.Join(submission.Path, f))
 			if err != nil {
 				logger.Error("FileDownload.GenerateZip.OpenLocal", zap.Error(err))
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
+			readers = append(readers, data)
+		}
+		w.Header().Add("Content-disposition", "attachment; filename="+fn)
+		zw := zip.NewWriter(w)
+		defer zw.Close()
+		for i, f := range submission.Files {
 			zf, err := zw.Create(f)
 			if err != nil {
 				logger.Error("FileDownload.GenerateZip.CreateZipFile", zap.Error(err))
 				return
 			}
-			_, err = io.Copy(zf, data)
+			_, err = io.Copy(zf, readers[i])
 			if err != nil {
 				logger.Error("FileDownload.GenerateZip.IOCopy", zap.Error(err))
 				return
@@ -2129,8 +2156,6 @@ func NewAutograderServiceServer(
 		mailer:               mailer,
 		captchaVerifier:      captchaVerifier,
 		ls:                   ls,
-		reportSubs:           make(map[uint64][]chan *grader_pb.GradeReport),
-		subsMu:               &sync.Mutex{},
 		graderHubSvc:         graderHubSvc,
 		userJWTSignKey:       []byte(viper.GetString("token.secret.session")),
 		uploadJWTSignKey:     []byte(viper.GetString("token.secret.upload")),

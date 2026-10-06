@@ -11,6 +11,10 @@ message RegisterGraderRequest {
 
 message RegisterGraderResponse {
   uint64 grader_id = 1;
+  // Per-registration secret. Every subsequent call from this grader must carry
+  // it (together with grader_id) in request metadata so the hub can tie the
+  // claimed grader id to the registration that issued it.
+  string session_token = 2;
 }
 
 message GraderHeartbeatRequest {

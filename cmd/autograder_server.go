@@ -406,6 +406,8 @@ func main() {
 	)
 	kaep := keepalive.EnforcementPolicy{PermitWithoutStream: true, MinTime: 1 * time.Second}
 	ksap := keepalive.ServerParameters{Time: 5 * time.Second, Timeout: 1 * time.Hour}
+	srr := repository.NewKVSubmissionReportRepository(db)
+	graderHubService := grader_grpc.NewGraderHubService(db, srr, viper.GetString("hub.token"), heartbeatTimeout)
 	graderHubServer := grpc.NewServer(
 		grpc.KeepaliveEnforcementPolicy(kaep),
 		grpc.KeepaliveParams(ksap),
@@ -414,6 +416,7 @@ func main() {
 			grpc_opentracing.UnaryServerInterceptor(),
 			grpc_prometheus.UnaryServerInterceptor,
 			grpc_zap.UnaryServerInterceptor(zapLogger),
+			graderHubService.UnaryAuthInterceptor(),
 			grpc_recovery.UnaryServerInterceptor(),
 		),
 		grpc_middleware.WithStreamServerChain(
@@ -421,11 +424,10 @@ func main() {
 			grpc_opentracing.StreamServerInterceptor(),
 			grpc_prometheus.StreamServerInterceptor,
 			grpc_zap.StreamServerInterceptor(zapLogger),
+			graderHubService.StreamAuthInterceptor(),
 			grpc_recovery.StreamServerInterceptor(),
 		),
 	)
-	srr := repository.NewKVSubmissionReportRepository(db)
-	graderHubService := grader_grpc.NewGraderHubService(db, srr, viper.GetString("hub.token"), heartbeatTimeout)
 	autograderService := autograder_grpc.NewAutograderServiceServer(
 		db, localStorage, m, hcaptchaClient, githubOauth2Config, srr, graderHubService,
 	)

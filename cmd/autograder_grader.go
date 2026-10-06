@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"autograder-server/pkg/grader"
@@ -88,13 +90,14 @@ type LogStreamContext struct {
 }
 
 type GraderWorker struct {
-	runningSubs       map[uint64]*grader_pb.GradeRequest
-	cancelChs         map[uint64]*SubmissionContext
-	containerIds      map[uint64]string
-	logStreams        map[uint64]map[string]*LogStreamContext
-	mu                *sync.Mutex
-	dockerGrader      *grader.DockerProgrammingGrader
-	graderId          uint64
+	cancelChs    map[uint64]*SubmissionContext
+	containerIds map[uint64]string
+	logStreams   map[uint64]map[string]*LogStreamContext
+	mu           *sync.Mutex
+	dockerGrader *grader.DockerProgrammingGrader
+	// identity is written once per (re-)registration in WorkLoop and read by
+	// every reporter/log-stream goroutine, hence the atomic pointer.
+	identity          atomic.Pointer[graderIdentity]
 	basePath          string
 	hubAddress        string
 	token             string
@@ -102,9 +105,29 @@ type GraderWorker struct {
 	sfs               *storage.SimpleHTTPFS
 	heartbeatInterval time.Duration
 	httpTimeout       time.Duration
-	rpcTimeout        time.Duration
 	containerWaiters  map[string]map[string]chan bool
 	containerStarted  map[string]bool
+}
+
+// graderIdentity is the id and session secret the hub issued at registration.
+type graderIdentity struct {
+	graderId     uint64
+	sessionToken string
+}
+
+func (g *GraderWorker) setIdentity(graderId uint64, sessionToken string) {
+	g.identity.Store(&graderIdentity{graderId: graderId, sessionToken: sessionToken})
+}
+
+func (g *GraderWorker) currentIdentity() graderIdentity {
+	if id := g.identity.Load(); id != nil {
+		return *id
+	}
+	return graderIdentity{}
+}
+
+func (g *GraderWorker) graderId() uint64 {
+	return g.currentIdentity().graderId
 }
 
 type ReportBuffer struct {
@@ -148,6 +171,10 @@ func graderReadConfig() {
 	}
 }
 
+// reportKeepaliveInterval is how often an empty GradeReport is queued while a
+// submission is being graded.
+const reportKeepaliveInterval = 5 * time.Second
+
 func NewReportBuffer() *ReportBuffer {
 	b := &ReportBuffer{
 		mu:     &sync.Mutex{},
@@ -155,8 +182,16 @@ func NewReportBuffer() *ReportBuffer {
 		closed: false,
 	}
 	b.cond = sync.NewCond(b.mu)
+	// Liveness probe for the GradeCallback stream: grading can run for minutes
+	// without producing a report, and the transport keepalive timeout is far
+	// too long to notice a dead hub connection in time. Periodically queuing an
+	// empty report forces a Send, so a broken stream surfaces as an error and
+	// submissionReporter reconnects before the real report is due. The hub
+	// ignores reports that carry no fields.
 	go func() {
-		for {
+		ticker := time.NewTicker(reportKeepaliveInterval)
+		defer ticker.Stop()
+		for range ticker.C {
 			b.mu.Lock()
 			if b.closed {
 				b.mu.Unlock()
@@ -165,7 +200,6 @@ func NewReportBuffer() *ReportBuffer {
 			b.buffer = append(b.buffer, &grader_pb.GradeReport{})
 			b.mu.Unlock()
 			b.cond.Broadcast()
-			time.Sleep(5 * time.Second)
 		}
 	}()
 	return b
@@ -182,6 +216,22 @@ func (b *ReportBuffer) isClosed() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.closed
+}
+
+// waitAndDrain blocks until at least one report is buffered or the buffer is
+// closed. It returns open=false once the buffer is closed and empty.
+func (b *ReportBuffer) waitAndDrain() (reports []*grader_pb.GradeReport, open bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for len(b.buffer) == 0 && !b.closed {
+		b.cond.Wait()
+	}
+	if b.closed && len(b.buffer) == 0 {
+		return nil, false
+	}
+	reports = b.buffer
+	b.buffer = nil
+	return reports, true
 }
 
 func (b *ReportBuffer) Send(report *grader_pb.GradeReport) {
@@ -217,115 +267,136 @@ func (g *GraderWorker) getMetadataKey(submissionId uint64) []byte {
 	return []byte(fmt.Sprintf("docker:metadata:%d", submissionId))
 }
 
+// sendReports forwards the pending reports to the hub in order. On the first
+// failure the unsent tail is kept in *reports so the caller can reconnect and
+// resume; on success *reports is emptied.
 func (g *GraderWorker) sendReports(
 	rpCli grader_pb.GraderHubService_GradeCallbackClient,
 	client grader_pb.GraderHubServiceClient,
 	submissionId uint64, reports *[]*grader_pb.GradeReport,
 	logger *zap.Logger,
 ) error {
-	var i int
-	var err error
 	defer logger.Debug("Grader.SendReports.Exit", zap.Uint64("submissionId", submissionId))
-	for i = 0; i < len(*reports); i++ {
-		report := (*reports)[i]
-		logger.Debug("Grader.SendReport", zap.Stringer("brief", report.GetBrief()))
-		if report.GetDockerMetadata() != nil {
-			g.mu.Lock()
-			g.containerIds[report.GetDockerMetadata().GetSubmissionId()] = report.GetDockerMetadata().GetContainerId()
-			g.mu.Unlock()
-
-			if report.GetDockerMetadata().GetStarted() {
-				g.mu.Lock()
-				g.containerStarted[report.GetDockerMetadata().GetContainerId()] = true
-				waiters := g.containerWaiters[report.GetDockerMetadata().GetContainerId()]
-				delete(g.containerWaiters, report.GetDockerMetadata().GetContainerId())
-				g.mu.Unlock()
-				for _, ch := range waiters {
-					ch <- true
-					close(ch)
-				}
-			}
-
-			value, err := proto.Marshal(report.GetDockerMetadata())
-			if err != nil {
-				logger.Error("Grader.MarshalMetadata", zap.Error(err))
-				continue
-			}
-			_, err = client.PutMetadata(
-				context.Background(), &grader_pb.PutMetadataRequest{
-					Key:      g.getMetadataKey(submissionId),
-					Value:    value,
-					GraderId: g.graderId,
-				},
-			)
-			if err != nil {
-				logger.Error("Grader.PutMetadata", zap.Error(err))
-			}
-			continue
+	sent := 0
+	for sent < len(*reports) {
+		if err := g.sendReport(rpCli, client, submissionId, (*reports)[sent], logger); err != nil {
+			logger.Error("Grader.SendReports.Remain", zap.Int("count", len(*reports)-sent), zap.Error(err))
+			*reports = (*reports)[sent:]
+			return err
 		}
-		submissionStatus := report.GetBrief().GetStatus()
-		gradeResponse := &grader_pb.GradeResponse{SubmissionId: submissionId, Report: report}
-		err := rpCli.Send(gradeResponse)
-		if err != nil {
-			logger.Error("Grader.GradeCallback.Send", zap.Error(err))
-			goto Out
-		}
-		if submissionStatus == model_pb.SubmissionStatus_Finished {
-			testcases := report.GetReport().GetTests()
-			wg := &sync.WaitGroup{}
-			for _, testcase := range testcases {
-				if testcase.GetOutputPath() == "" {
-					continue
-				}
-				wg.Add(1)
-				go func(outputPath string) {
-					logger.Debug("OutputFile.Upload", zap.String("outputPath", outputPath))
-					err := retry.Do(
-						func() error {
-							ctx, cancel := context.WithTimeout(context.Background(), g.httpTimeout)
-							defer cancel()
-							return g.uploadFile(
-								ctx,
-								outputPath,
-							)
-						}, retry.RetryIf(
-							func(err error) bool {
-								return os.IsTimeout(err)
-							},
-						),
-						retry.Attempts(3),
-					)
-					wg.Done()
-					if err != nil {
-						logger.Error("OutputFile.Upload", zap.String("outputPath", outputPath), zap.Error(err))
-					}
-					_ = g.ls.Delete(context.Background(), outputPath)
-				}(path.Join(fmt.Sprintf("runs/submissions/%d/results/outputs", submissionId), testcase.GetOutputPath()))
-			}
-			wg.Wait()
-		}
-		if submissionStatus == model_pb.SubmissionStatus_Finished ||
-			submissionStatus == model_pb.SubmissionStatus_Cancelled ||
-			submissionStatus == model_pb.SubmissionStatus_Failed {
-			_, err := client.PutMetadata(
-				context.Background(),
-				&grader_pb.PutMetadataRequest{GraderId: g.graderId, Key: g.getMetadataKey(submissionId)},
-			)
-			if err != nil {
-				logger.Error("Grader.DeleteMetadata", zap.Error(err))
-			}
-		}
+		sent++
 	}
-Out:
-	if i < len(*reports) {
-		logger.Error("Grader.SendReports.Remain", zap.Int("count", len(*reports)-i))
-		*reports = (*reports)[i:]
-	} else {
-		*reports = nil
-	}
-	return err
+	*reports = nil
+	return nil
 }
 
+// recordDockerMetadata remembers the container backing a submission, wakes any
+// log streams waiting for it to start, and mirrors the metadata to the hub so
+// an orphaned container can be cleaned up after a grader restart.
+func (g *GraderWorker) recordDockerMetadata(
+	client grader_pb.GraderHubServiceClient, submissionId uint64, md *grader_pb.DockerGraderMetadata, logger *zap.Logger,
+) {
+	g.mu.Lock()
+	g.containerIds[md.GetSubmissionId()] = md.GetContainerId()
+	var waiters map[string]chan bool
+	if md.GetStarted() {
+		g.containerStarted[md.GetContainerId()] = true
+		waiters = g.containerWaiters[md.GetContainerId()]
+		delete(g.containerWaiters, md.GetContainerId())
+	}
+	g.mu.Unlock()
+	for _, ch := range waiters {
+		ch <- true
+		close(ch)
+	}
+
+	value, err := proto.Marshal(md)
+	if err != nil {
+		logger.Error("Grader.MarshalMetadata", zap.Error(err))
+		return
+	}
+	_, err = client.PutMetadata(
+		g.authOutgoing(context.Background()), &grader_pb.PutMetadataRequest{
+			Key:      g.getMetadataKey(submissionId),
+			Value:    value,
+			GraderId: g.graderId(),
+		},
+	)
+	if err != nil {
+		logger.Error("Grader.PutMetadata", zap.Error(err))
+	}
+}
+
+func (g *GraderWorker) uploadTestOutputs(submissionId uint64, report *model_pb.SubmissionReport, logger *zap.Logger) {
+	wg := &sync.WaitGroup{}
+	for _, testcase := range report.GetTests() {
+		if testcase.GetOutputPath() == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(outputPath string) {
+			defer wg.Done()
+			logger.Debug("OutputFile.Upload", zap.String("outputPath", outputPath))
+			err := retry.Do(
+				func() error {
+					ctx, cancel := context.WithTimeout(context.Background(), g.httpTimeout)
+					defer cancel()
+					return g.uploadFile(ctx, outputPath)
+				}, retry.RetryIf(
+					func(err error) bool {
+						return os.IsTimeout(err)
+					},
+				),
+				retry.Attempts(3),
+			)
+			if err != nil {
+				logger.Error("OutputFile.Upload", zap.String("outputPath", outputPath), zap.Error(err))
+			}
+			_ = g.ls.Delete(context.Background(), outputPath)
+		}(path.Join(fmt.Sprintf("runs/submissions/%d/results/outputs", submissionId), testcase.GetOutputPath()))
+	}
+	wg.Wait()
+}
+
+func (g *GraderWorker) sendReport(
+	rpCli grader_pb.GraderHubService_GradeCallbackClient,
+	client grader_pb.GraderHubServiceClient,
+	submissionId uint64, report *grader_pb.GradeReport,
+	logger *zap.Logger,
+) error {
+	logger.Debug("Grader.SendReport", zap.Stringer("brief", report.GetBrief()))
+	if report.GetDockerMetadata() != nil {
+		// Metadata is bookkeeping between grader and hub, not part of the
+		// report stream; a failure here must not stall the stream.
+		g.recordDockerMetadata(client, submissionId, report.GetDockerMetadata(), logger)
+		return nil
+	}
+	if err := rpCli.Send(&grader_pb.GradeResponse{SubmissionId: submissionId, Report: report}); err != nil {
+		logger.Error("Grader.GradeCallback.Send", zap.Error(err))
+		return err
+	}
+	submissionStatus := report.GetBrief().GetStatus()
+	if submissionStatus == model_pb.SubmissionStatus_Finished {
+		g.uploadTestOutputs(submissionId, report.GetReport(), logger)
+	}
+	if submissionStatus == model_pb.SubmissionStatus_Finished ||
+		submissionStatus == model_pb.SubmissionStatus_Cancelled ||
+		submissionStatus == model_pb.SubmissionStatus_Failed {
+		_, err := client.PutMetadata(
+			g.authOutgoing(context.Background()),
+			&grader_pb.PutMetadataRequest{GraderId: g.graderId(), Key: g.getMetadataKey(submissionId)},
+		)
+		if err != nil {
+			logger.Error("Grader.DeleteMetadata", zap.Error(err))
+		}
+	}
+	return nil
+}
+
+// submissionReporter streams the buffered reports of one submission to the hub
+// over a GradeCallback stream, reconnecting on transport errors until the
+// buffer is closed and drained. It gives up only when the hub rejects the
+// stream outright (e.g. this grader no longer owns the submission).
 func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuffer) {
 	logger := zap.L().With(zap.Uint64("submissionId", submissionId))
 	var reports []*grader_pb.GradeReport
@@ -339,58 +410,74 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 		}
 	}(fmt.Sprintf("runs/submissions/%d", submissionId))
 	for !buffer.isClosed() || len(reports) > 0 {
-		conn, client := g.getNewClient()
-		ctx := context.Background()
-		ctx = metadata.AppendToOutgoingContext(
-			ctx, "submissionId", strconv.Itoa(int(submissionId)), "graderId",
-			strconv.Itoa(int(g.graderId)),
-		)
-		rpCli, err := client.GradeCallback(ctx)
+		retry, err := g.reportSession(submissionId, buffer, &reports, logger)
 		if err != nil {
-			conn.Close()
-			logger.Error("Grader.StartGradeCallback", zap.Error(err))
-			if buffer.isClosed() {
-				return
-			}
-			time.Sleep(1 * time.Second)
-			continue
+			logger.Error("Grader.SubmissionReporter", zap.Error(err))
 		}
-		err = g.sendReports(rpCli, client, submissionId, &reports, logger)
-		if err != nil {
-			time.Sleep(1 * time.Second)
-			err := rpCli.CloseSend()
-			if err != nil {
-				logger.Error("Grader.CloseGradeCallback", zap.Error(err))
-			}
-			conn.Close()
-			continue
+		if !retry {
+			return
 		}
-		for {
-			buffer.mu.Lock()
-			for len(buffer.buffer) == 0 && !buffer.closed {
-				buffer.cond.Wait()
-			}
-			if buffer.closed && len(buffer.buffer) == 0 {
-				buffer.mu.Unlock()
-				rpCli.CloseAndRecv()
-				logger.Debug("Grader.SubmissionReporter.BufferClosed", zap.Uint64("submissionId", submissionId))
-				break
-			}
-			reports = append(reports, buffer.buffer...)
-			buffer.buffer = nil
-			buffer.mu.Unlock()
-			err = g.sendReports(rpCli, client, submissionId, &reports, logger)
-			if err != nil {
-				err := rpCli.CloseSend()
-				if err != nil {
-					logger.Error("Grader.CloseGradeCallback", zap.Error(err))
-				}
-				conn.Close()
-				time.Sleep(1 * time.Second)
-				break
-			}
+		if buffer.isClosed() && len(reports) == 0 {
+			return
 		}
-		conn.Close()
+		time.Sleep(1 * time.Second)
+	}
+}
+
+// reportSession runs one GradeCallback stream. It returns retry=false when the
+// hub permanently refused the stream, in which case the local grading run is
+// cancelled because its result can no longer be delivered.
+func (g *GraderWorker) reportSession(
+	submissionId uint64, buffer *ReportBuffer, reports *[]*grader_pb.GradeReport, logger *zap.Logger,
+) (retry bool, err error) {
+	conn, client := g.getNewClient()
+	if conn == nil {
+		return true, errors.New("dial hub")
+	}
+	defer conn.Close()
+	ctx := g.authOutgoing(context.Background())
+	ctx = metadata.AppendToOutgoingContext(ctx, "submissionId", strconv.FormatUint(submissionId, 10))
+	rpCli, err := client.GradeCallback(ctx)
+	if err != nil {
+		return g.shouldRetryCallback(submissionId, err, logger), err
+	}
+	for {
+		if err := g.sendReports(rpCli, client, submissionId, reports, logger); err != nil {
+			// Send only reports the transport failure; the real status (for
+			// example PermissionDenied) is what the server closed with.
+			if _, recvErr := rpCli.CloseAndRecv(); recvErr != nil {
+				err = recvErr
+			}
+			return g.shouldRetryCallback(submissionId, err, logger), err
+		}
+		pending, open := buffer.waitAndDrain()
+		if !open {
+			if _, err := rpCli.CloseAndRecv(); err != nil && err != io.EOF {
+				return g.shouldRetryCallback(submissionId, err, logger), err
+			}
+			logger.Debug("Grader.SubmissionReporter.BufferClosed")
+			return false, nil
+		}
+		*reports = append(*reports, pending...)
+	}
+}
+
+// shouldRetryCallback decides whether a failed GradeCallback stream is worth
+// re-establishing. A PermissionDenied means the hub will never accept reports
+// for this submission from us again (it was reassigned or we lost our
+// session), so grading is cancelled locally instead of retrying forever.
+func (g *GraderWorker) shouldRetryCallback(submissionId uint64, err error, logger *zap.Logger) bool {
+	switch status.Code(err) {
+	case codes.PermissionDenied, codes.Unauthenticated:
+		logger.Warn("Grader.GradeCallback.Rejected", zap.Error(err))
+		g.mu.Lock()
+		if sc := g.cancelChs[submissionId]; sc != nil {
+			sc.cancel()
+		}
+		g.mu.Unlock()
+		return false
+	default:
+		return true
 	}
 }
 
@@ -436,9 +523,9 @@ func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
 	}
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
+	ctx = g.authOutgoing(ctx)
 	ctx = metadata.AppendToOutgoingContext(
-		ctx, "submissionId", strconv.Itoa(int(submissionId)), "requestId", requestId, "graderId",
-		strconv.Itoa(int(g.graderId)),
+		ctx, "submissionId", strconv.Itoa(int(submissionId)), "requestId", requestId,
 	)
 	g.mu.Lock()
 	if g.logStreams[submissionId] == nil {
@@ -471,7 +558,7 @@ func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
 		if containerId != "" {
 			break
 		}
-		slCli.Send(
+		err = slCli.Send(
 			&grader_pb.StreamLogResponse{
 				Data: []byte(fmt.Sprintf(
 					"creating container...(%ds)\r",
@@ -479,6 +566,10 @@ func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
 				)),
 			},
 		)
+		if err != nil {
+			logger.Error("StreamLog.Send", zap.Error(err))
+			return
+		}
 		select {
 		case <-ticker.C:
 			g.mu.Lock()
@@ -493,8 +584,12 @@ func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
 	var r io.ReadCloser
 	g.mu.Lock()
 	if _, found := g.containerStarted[containerId]; !found {
-		slCli.Send(&grader_pb.StreamLogResponse{Data: []byte("starting container...\n")})
-		ch := make(chan bool)
+		if err = slCli.Send(&grader_pb.StreamLogResponse{Data: []byte("starting container...\n")}); err != nil {
+			g.mu.Unlock()
+			logger.Error("StreamLog.Send", zap.Error(err))
+			return
+		}
+		ch := make(chan bool, 1)
 		if g.containerWaiters[containerId] == nil {
 			g.containerWaiters[containerId] = map[string]chan bool{}
 		}
@@ -518,7 +613,7 @@ func (g *GraderWorker) streamLog(submissionId uint64, requestId string) {
 		<-ctx.Done()
 		r.Close()
 	}()
-	logBuf := make([]byte, 32*1024, 32*1024)
+	logBuf := make([]byte, 32*1024)
 	pr, pw := io.Pipe()
 	go func() {
 		stdcopy.StdCopy(pw, pw, r)
@@ -643,6 +738,19 @@ func (g *GraderWorker) gradeOneSubmission(
 	buffer.Close()
 }
 
+// authOutgoing attaches the hub token, this grader's id, and the session token
+// issued at registration so the hub can authenticate the call and bind it to
+// this grader's identity.
+func (g *GraderWorker) authOutgoing(ctx context.Context) context.Context {
+	id := g.currentIdentity()
+	return metadata.AppendToOutgoingContext(
+		ctx,
+		"token", g.token,
+		"graderid", strconv.FormatUint(id.graderId, 10),
+		"session-token", id.sessionToken,
+	)
+}
+
 func (g *GraderWorker) getNewClient() (*grpc.ClientConn, grader_pb.GraderHubServiceClient) {
 	keep := keepalive.ClientParameters{PermitWithoutStream: true, Time: 5 * time.Second, Timeout: 1 * time.Hour}
 	conn, err := grpc.Dial(
@@ -687,22 +795,29 @@ func (g *GraderWorker) WorkLoop() {
 	conn, client := g.getNewClient()
 	defer conn.Close()
 	for {
-		resp, err := client.RegisterGrader(context.Background(), registerRequest)
+		resp, err := client.RegisterGrader(g.authOutgoing(context.Background()), registerRequest)
 		if err != nil {
 			if status.Code(err) == codes.AlreadyExists {
-				zap.L().Fatal("Grader.Register.NameAlreadyExists", zap.Error(err))
-				return
+				// Either another grader runs under the same hostname, or the hub
+				// has not yet noticed that our previous connection died. The
+				// latter resolves itself once the hub's heartbeat timeout fires,
+				// so keep retrying instead of exiting.
+				zap.L().Warn(
+					"Grader.Register.NameAlreadyExists", zap.Error(err),
+					zap.String("hint", "another grader may use the same hostname; retrying"),
+				)
+			} else {
+				zap.L().Error("Grader.Register", zap.Error(err))
 			}
-			zap.L().Error("Grader.Register", zap.Error(err))
 			time.Sleep(3 * time.Second)
 			continue
 		}
 		graderId = resp.GetGraderId()
-		g.graderId = graderId
+		g.setIdentity(graderId, resp.GetSessionToken())
 		logger := zap.L().With(zap.Uint64("graderId", graderId))
 		logger.Info("Grader.Registered")
 		ctx, cancel := context.WithCancel(context.Background())
-		metadatas, err := client.GetAllMetadata(ctx, &grader_pb.GetAllMetadataRequest{GraderId: graderId})
+		metadatas, err := client.GetAllMetadata(g.authOutgoing(ctx), &grader_pb.GetAllMetadataRequest{GraderId: graderId})
 		cancel()
 		if err != nil {
 			logger.Error("Grader.GetPreviousMetadata", zap.Error(err))
@@ -737,7 +852,7 @@ func (g *GraderWorker) WorkLoop() {
 		for {
 			quit := false
 			hbCtx, hbCancel := context.WithCancel(context.Background())
-			hbCtx = metadata.AppendToOutgoingContext(hbCtx, "graderId", fmt.Sprintf("%d", graderId))
+			hbCtx = g.authOutgoing(hbCtx)
 			hbCli, err := client.GraderHeartbeat(hbCtx)
 			if err != nil {
 				logger.Error("Grader.StartHeartbeat", zap.Error(err))
@@ -852,7 +967,6 @@ func main() {
 	}
 	basePath = filepath.Join(cwd, basePath)
 	worker := &GraderWorker{
-		runningSubs:       map[uint64]*grader_pb.GradeRequest{},
 		cancelChs:         map[uint64]*SubmissionContext{},
 		mu:                &sync.Mutex{},
 		basePath:          basePath,
@@ -870,7 +984,6 @@ func main() {
 	if err != nil {
 		zapLogger.Fatal("HTTP.Timeout.Invalid", zap.Error(err))
 	}
-	worker.rpcTimeout = 10 * time.Second
 
 	if viper.GetBool("metrics.enabled") {
 		metricsPort := viper.GetInt("metrics.port")
