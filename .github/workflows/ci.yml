@@ -8,8 +8,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -47,13 +47,13 @@ jobs:
   check-web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: 'recursive'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '18'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
@@ -70,26 +70,26 @@ jobs:
   build-web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: 'recursive'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '18'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
       - run: cd web && git rev-parse HEAD | tee ../.web-version
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: web/.angular
           key: autograder-angular-${{ hashFiles('.web-version') }}
           restore-keys: |
             autograder-angular-
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         id: cache-web
         with:
           path: pkg/web/dist
@@ -98,7 +98,7 @@ jobs:
         run: npm install -g @angular/cli && cd web && npm install && npm install vcd-stream --ignore-scripts && ng build --output-path ../pkg/web/dist
       - run: zip -r autograder-web.zip pkg/web/dist
         if: steps.cache-web.outputs.cache-hit != 'true'
-      - uses: appleboy/scp-action@master
+      - uses: appleboy/scp-action@v1
         if: steps.cache-web.outputs.cache-hit != 'true' && github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
         with:
           host: ${{ secrets.ALIYUN_HOST }}
@@ -112,6 +112,10 @@ jobs:
   build-server:
     runs-on: ubuntu-latest
     needs: [check, build-web]
+    # Needed by `gh release upload` when the workflow is triggered by a
+    # release; the other jobs keep the repository default permissions.
+    permissions:
+      contents: write
     strategy:
       matrix:
         GOOS: [linux, windows]
@@ -125,18 +129,18 @@ jobs:
           - GOOS: windows
             GOARCH: arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: 'recursive'
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: cd web && git rev-parse HEAD | tee ../.web-version
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: pkg/web/dist
           key: autograder-web-${{ hashFiles('.web-version') }}
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/go-build
@@ -147,7 +151,7 @@ jobs:
       - run: CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} GOARCH=${{ matrix.GOARCH }} go build -tags containers_image_openpgp -ldflags '-extldflags "-static"' -o autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }} ./cmd/autograder-server
       - run: CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} GOARCH=${{ matrix.GOARCH }} go build -tags containers_image_openpgp -ldflags '-extldflags "-static"' -o autograder-grader-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }} ./cmd/autograder-grader
       - run: tar zcvf autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }} autograder-grader-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }}
-      - uses: appleboy/scp-action@master
+      - uses: appleboy/scp-action@v1
         if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
         with:
           host: ${{ secrets.ALIYUN_HOST }}
@@ -157,14 +161,11 @@ jobs:
           source: autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz
           target: autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}
           overwrite: true
+      # upload-release-asset@v1.0.2 is archived and runs on the removed node12
+      # runtime; gh is preinstalled on the runner and needs contents: write.
       - name: Upload release archive
-        uses: actions/upload-release-asset@v1.0.2
         if: github.event_name == 'release'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz
-          asset_name: autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz
-          asset_content_type: application/octet-stream
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz" --clobber
 
