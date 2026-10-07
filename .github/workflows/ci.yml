@@ -32,7 +32,9 @@ jobs:
           ALLOWED="GO-2026-4887 GO-2026-4883 GO-2025-3829"
           rc=0
           output=$(govulncheck -tags containers_image_openpgp ./... 2>&1) || rc=$?
-          echo "$output"
+          # Print the findings without the "#N: file.go:line:col: ..." example
+          # traces, which GitHub would render as spurious error annotations.
+          echo "$output" | grep -vE '^[[:space:]]*#[0-9]+: |Example traces found:' || true
           if [ "$rc" -eq 0 ]; then exit 0; fi
           if [ "$rc" -ne 3 ]; then echo "govulncheck failed with exit code $rc"; exit "$rc"; fi
           found=$(echo "$output" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u)
@@ -62,10 +64,10 @@ jobs:
       - run: cd web && npm install
       - run: cd web && npx ng lint
       # Advisory only until Angular is upgraded (the known advisories in
-      # Angular 13's dependency tree need a major-version bump).
+      # Angular 13's dependency tree need a major-version bump). `|| true`
+      # keeps the step green so it does not mark the run with a red X.
       - name: npm audit (advisory, production dependencies)
-        continue-on-error: true
-        run: cd web && npm audit --omit=dev
+        run: cd web && (npm audit --omit=dev || true)
 
   build-web:
     runs-on: ubuntu-latest
