@@ -131,6 +131,9 @@ func (d *DockerProgrammingGrader) BuildImage(ctx context.Context, buildContext i
 	return nil
 }
 
+// MaxOutputBytes caps how much grader output is forwarded to the hub.
+const MaxOutputBytes = 50 * 1024
+
 const (
 	ErrPullImage             = 1
 	ErrReadPullImageResponse = 2
@@ -415,7 +418,7 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 			for _, testcase := range resultsPB.Tests {
 				score += testcase.Score
 				maxScore += testcase.MaxScore
-				testcase.Output = truncateOutput(testcase.Output, 50*1024, "\n...truncated...\n")
+				testcase.Output = truncateOutput(testcase.Output, MaxOutputBytes, "\n...truncated...\n")
 			}
 			resultsPB.Score = score
 			resultsPB.MaxScore = maxScore
@@ -435,8 +438,14 @@ WriteReport:
 		data, err := io.ReadAll(pr)
 		if err == nil {
 			resultsPB.Output = string(data)
-			if len(resultsPB.Output) > 50*1024 {
-				resultsPB.Output = resultsPB.Output[len(resultsPB.Output)-50*1024:]
+			if len(resultsPB.Output) > MaxOutputBytes {
+				// Keep the tail (the most recent log output) but back the
+				// cut off to a rune boundary so the result stays valid UTF-8.
+				cut := len(resultsPB.Output) - MaxOutputBytes
+				for cut < len(resultsPB.Output) && !utf8.RuneStart(resultsPB.Output[cut]) {
+					cut++
+				}
+				resultsPB.Output = resultsPB.Output[cut:]
 			}
 		} else {
 			logger.Error("Grader.ContainerLog.Read", zap.Error(err))

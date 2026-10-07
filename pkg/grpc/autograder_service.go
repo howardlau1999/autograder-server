@@ -77,6 +77,17 @@ type AutograderService struct {
 var ResetCodeMax = 900000
 
 const MaxMultipartFormParseMemory = 10 * 1024 * 1024
+
+// Validation limits and token lifetimes shared by the service methods.
+const (
+	MinPasswordLength          = 8
+	MaxNicknameLength          = 16
+	MaxStudentIdLength         = 16
+	UserTokenValidDuration     = 3 * time.Hour
+	TransferTokenValidDuration = 1 * time.Minute
+	MIMESniffLength            = 512
+)
+
 const PasswordResetSubject = "Autograder 密码重置验证码"
 const PasswordResetTemplate = "您的密码重置验证码为：%s，10 分钟内有效。\nAutograder"
 const PasswordResetRepoType = "password_reset"
@@ -129,7 +140,7 @@ func (a *AutograderService) ResetPassword(
 		l.Error("ResetPassword.GetUser", zap.String("email", email), zap.Error(err))
 		return nil, status.Error(codes.NotFound, "EMAIL")
 	}
-	if len(request.GetPassword()) < 8 {
+	if len(request.GetPassword()) < MinPasswordLength {
 		return nil, status.Error(codes.InvalidArgument, "PASSWORD")
 	}
 	err = a.userRepo.UpdateUserAtomic(ctx, userId, func(user *model_pb.User) error {
@@ -240,7 +251,7 @@ func (a *AutograderService) SignUp(
 	if err := a.validateEmailCode(ctx, SignUpRepoType, request.GetEmail(), request.GetCode()); err != nil {
 		return nil, err
 	}
-	if len(request.GetPassword()) < 8 {
+	if len(request.GetPassword()) < MinPasswordLength {
 		return nil, status.Error(codes.InvalidArgument, "PASSWORD")
 	}
 	userId, err := a.signUpNewUser(ctx, request.GetEmail(), request.GetUsername(), request.GetPassword())
@@ -471,7 +482,7 @@ func (a *AutograderService) InitDownload(
 		payloadPB := &autograder_pb.DownloadTokenPayload{
 			RealPath: submission.GetPath(), Filename: fn, IsDirectory: true, SubmissionId: request.GetSubmissionId(),
 		}
-		ss, err := a.signPayloadToken(a.downloadJWTSignKey, payloadPB, time.Now().Add(1*time.Minute))
+		ss, err := a.signPayloadToken(a.downloadJWTSignKey, payloadPB, time.Now().Add(TransferTokenValidDuration))
 		if err != nil {
 			return nil, status.Error(codes.Internal, "SIGN_JWT")
 		}
@@ -496,7 +507,7 @@ func (a *AutograderService) InitDownload(
 	if err != nil {
 		return nil, status.Error(codes.Internal, "FILE_SIZE")
 	}
-	head := make([]byte, 512)
+	head := make([]byte, MIMESniffLength)
 	n, _ := io.ReadFull(file, head)
 	fileType := http.DetectContentType(head[:n])
 	fileTypePB := autograder_pb.DownloadFileType_Binary
@@ -508,7 +519,7 @@ func (a *AutograderService) InitDownload(
 		fileTypePB = autograder_pb.DownloadFileType_Text
 	}
 	payloadPB := &autograder_pb.DownloadTokenPayload{RealPath: realpath, Filename: fn}
-	ss, err := a.signPayloadToken(a.downloadJWTSignKey, payloadPB, time.Now().Add(1*time.Minute))
+	ss, err := a.signPayloadToken(a.downloadJWTSignKey, payloadPB, time.Now().Add(TransferTokenValidDuration))
 	if err != nil {
 		return nil, status.Error(codes.Internal, "SIGN_JWT")
 	}
@@ -1048,7 +1059,7 @@ func (a *AutograderService) InitUpload(
 		Filesize:    request.GetFilesize(),
 		UploadLimit: manifest.GetUploadLimit(),
 	}
-	ss, err := a.signPayloadToken(key, payload, time.Now().Add(1*time.Minute))
+	ss, err := a.signPayloadToken(key, payload, time.Now().Add(TransferTokenValidDuration))
 	if err != nil {
 		return nil, err
 	}
@@ -1266,7 +1277,7 @@ func (a *AutograderService) signLoginToken(
 		Nickname: nickname,
 		IsAdmin:  isAdmin,
 	}
-	ss, err := a.signPayloadToken(a.userJWTSignKey, payload, time.Now().Add(3*time.Hour))
+	ss, err := a.signPayloadToken(a.userJWTSignKey, payload, time.Now().Add(UserTokenValidDuration))
 	if err != nil {
 		return err
 	}
@@ -1519,7 +1530,7 @@ func (a *AutograderService) HandleFileUpload(w http.ResponseWriter, r *http.Requ
 		w.WriteHeader(http.StatusLengthRequired)
 		return
 	}
-	fileHeader := make([]byte, 512)
+	fileHeader := make([]byte, MIMESniffLength)
 	if _, err = io.ReadFull(uploadFile, fileHeader); err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -1746,10 +1757,10 @@ func (a *AutograderService) UpdateUser(
 	ctx context.Context, request *autograder_pb.UpdateUserRequest,
 ) (*autograder_pb.UpdateUserResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
-	if len(request.GetNickname()) > 16 {
+	if len(request.GetNickname()) > MaxNicknameLength {
 		return nil, status.Error(codes.InvalidArgument, "NICKNAME_TOO_LONG")
 	}
-	if len(request.GetStudentId()) > 16 {
+	if len(request.GetStudentId()) > MaxStudentIdLength {
 		return nil, status.Error(codes.InvalidArgument, "STUDENT_ID_TOO_LONG")
 	}
 	err := a.userRepo.UpdateUserAtomic(ctx, user.GetUserId(), func(dbUser *model_pb.User) error {

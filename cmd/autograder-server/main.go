@@ -496,10 +496,12 @@ func main() {
 		// within their own prefix to win a fresh bucket.
 		return httprate.CanonicalizeIP(chiMiddleware.GetClientIP(r.Context())), nil
 	}
+	const rateLimitRequests = 100
+	const rateLimitWindow = 3 * time.Second
 	router := chi.NewRouter()
 	router.Use(
 		clientIPMiddleware,
-		httprate.LimitBy(100, 3*time.Second, clientIPKey),
+		httprate.LimitBy(rateLimitRequests, rateLimitWindow, clientIPKey),
 		chiMiddleware.Logger,
 		chiMiddleware.Recoverer,
 		middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler,

@@ -369,7 +369,7 @@ func (g *GraderHubService) graderMonitor(graderId uint64, alive chan *time.Time)
 				err = g.graderRepo.UpdateGrader(context.Background(), graderId, grader)
 				g.onGraderOffline(graderId)
 			} else if grader.Status == model_pb.GraderStatusMetadata_Unknown {
-				if t.After(grader.LastHeartbeat.AsTime().Add(30 * time.Second)) {
+				if t.After(grader.LastHeartbeat.AsTime().Add(graderOfflineGracePeriod)) {
 					logger.Error("Grader.Monitor.Timeout.Offline")
 					grader.Status = model_pb.GraderStatusMetadata_Offline
 					g.onGraderOffline(graderId)
@@ -808,6 +808,10 @@ func (g *GraderHubService) closeAllSubmissionSubscribers(submissionId uint64) {
 }
 
 var errGraderOffline = errors.New("grader offline")
+
+// graderOfflineGracePeriod is how long a grader in the Unknown state may stay
+// silent before it is declared offline; online graders get heartbeatTimeout.
+const graderOfflineGracePeriod = 30 * time.Second
 
 func (g *GraderHubService) StreamLog(ctx context.Context, submissionId uint64) (chan []byte, error) {
 	requestId := uuid.NewString()
