@@ -109,5 +109,6 @@ fabric.properties
 db
 runs
 uploads
-pkg/web/dist
+pkg/web/dist/*
+!pkg/web/dist/.keep
 *.log

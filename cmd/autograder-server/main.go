@@ -32,8 +32,8 @@ import (
 	"autograder-server/pkg/web"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/go-chi/chi"
-	chiMiddleware "github.com/go-chi/chi/middleware"
+	"github.com/go-chi/chi/v5"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httprate"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
@@ -64,6 +64,11 @@ type ServerProvidedTokens struct {
 const initialConfig = `
 [server]
 	development=false
+	# Number of trusted reverse-proxy hops in front of this server (nginx,
+	# CDN, load balancer). 0 means the socket address is used for rate
+	# limiting and X-Forwarded-For is ignored; set it to the real hop count
+	# when deployed behind a proxy, or clients can spoof their IP.
+	trusted-proxy-count=0
 
 [cors]
 	# Cross-origin requests are only accepted from these origins in production.
@@ -189,6 +194,7 @@ func serverReadConfig() {
 	viper.SetDefault("metrics.path", "/metrics")
 	viper.SetDefault("db.local.path", "db")
 	viper.SetDefault("server.development", false)
+	viper.SetDefault("server.trusted-proxy-count", 0)
 	viper.SetDefault("log.level", "info")
 	viper.SetDefault("log.file", "server.log")
 	viper.SetDefault("log.development", "false")
@@ -474,10 +480,26 @@ func main() {
 			},
 		),
 	)
+	// Resolve the client IP before rate limiting. By default the socket
+	// address is used and X-Forwarded-For is ignored, so a client cannot
+	// spoof its way around the limiter; behind a reverse proxy set
+	// server.trusted-proxy-count to the real number of hops.
+	trustedProxyCount := viper.GetInt("server.trusted-proxy-count")
+	var clientIPMiddleware func(http.Handler) http.Handler
+	if trustedProxyCount > 0 {
+		clientIPMiddleware = chiMiddleware.ClientIPFromXFFTrustedProxies(trustedProxyCount)
+	} else {
+		clientIPMiddleware = chiMiddleware.ClientIPFromRemoteAddr
+	}
+	clientIPKey := func(r *http.Request) (string, error) {
+		// CanonicalizeIP buckets IPv6 clients by /64 so they cannot rotate
+		// within their own prefix to win a fresh bucket.
+		return httprate.CanonicalizeIP(chiMiddleware.GetClientIP(r.Context())), nil
+	}
 	router := chi.NewRouter()
 	router.Use(
-		chiMiddleware.RealIP,
-		httprate.LimitByIP(100, 3*time.Second),
+		clientIPMiddleware,
+		httprate.LimitBy(100, 3*time.Second, clientIPKey),
 		chiMiddleware.Logger,
 		chiMiddleware.Recoverer,
 		middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler,

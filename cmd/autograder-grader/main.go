@@ -171,8 +171,8 @@ func graderReadConfig() {
 	}
 }
 
-// reportKeepaliveInterval is how often an empty GradeReport is queued while a
-// submission is being graded.
+// reportKeepaliveInterval bounds how long the submission reporter waits for a
+// real report before probing the hub stream with an empty one.
 const reportKeepaliveInterval = 5 * time.Second
 
 func NewReportBuffer() *ReportBuffer {
@@ -182,26 +182,6 @@ func NewReportBuffer() *ReportBuffer {
 		closed: false,
 	}
 	b.cond = sync.NewCond(b.mu)
-	// Liveness probe for the GradeCallback stream: grading can run for minutes
-	// without producing a report, and the transport keepalive timeout is far
-	// too long to notice a dead hub connection in time. Periodically queuing an
-	// empty report forces a Send, so a broken stream surfaces as an error and
-	// submissionReporter reconnects before the real report is due. The hub
-	// ignores reports that carry no fields.
-	go func() {
-		ticker := time.NewTicker(reportKeepaliveInterval)
-		defer ticker.Stop()
-		for range ticker.C {
-			b.mu.Lock()
-			if b.closed {
-				b.mu.Unlock()
-				return
-			}
-			b.buffer = append(b.buffer, &grader_pb.GradeReport{})
-			b.mu.Unlock()
-			b.cond.Broadcast()
-		}
-	}()
 	return b
 }
 
@@ -218,20 +198,36 @@ func (b *ReportBuffer) isClosed() bool {
 	return b.closed
 }
 
-// waitAndDrain blocks until at least one report is buffered or the buffer is
-// closed. It returns open=false once the buffer is closed and empty.
-func (b *ReportBuffer) waitAndDrain() (reports []*grader_pb.GradeReport, open bool) {
+// waitAndDrain blocks until at least one report is buffered, the buffer is
+// closed, or timeout elapses. open=false means the buffer is closed and empty;
+// timedOut=true means there is nothing to send yet but the caller should probe
+// the stream.
+func (b *ReportBuffer) waitAndDrain(timeout time.Duration) (
+	reports []*grader_pb.GradeReport, open bool, timedOut bool,
+) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for len(b.buffer) == 0 && !b.closed {
-		b.cond.Wait()
+	if len(b.buffer) == 0 && !b.closed {
+		timer := time.AfterFunc(timeout, func() {
+			b.mu.Lock()
+			b.cond.Broadcast()
+			b.mu.Unlock()
+		})
+		defer timer.Stop()
+		deadline := time.Now().Add(timeout)
+		for len(b.buffer) == 0 && !b.closed && time.Now().Before(deadline) {
+			b.cond.Wait()
+		}
 	}
-	if b.closed && len(b.buffer) == 0 {
-		return nil, false
+	if len(b.buffer) == 0 {
+		if b.closed {
+			return nil, false, false
+		}
+		return nil, true, true
 	}
 	reports = b.buffer
 	b.buffer = nil
-	return reports, true
+	return reports, true, false
 }
 
 func (b *ReportBuffer) Send(report *grader_pb.GradeReport) {
@@ -450,13 +446,27 @@ func (g *GraderWorker) reportSession(
 			}
 			return g.shouldRetryCallback(submissionId, err, logger), err
 		}
-		pending, open := buffer.waitAndDrain()
+		pending, open, timedOut := buffer.waitAndDrain(reportKeepaliveInterval)
 		if !open {
 			if _, err := rpCli.CloseAndRecv(); err != nil && err != io.EOF {
 				return g.shouldRetryCallback(submissionId, err, logger), err
 			}
 			logger.Debug("Grader.SubmissionReporter.BufferClosed")
 			return false, nil
+		}
+		if timedOut {
+			// Liveness probe: grading can run for minutes without producing a
+			// report, and the transport keepalive timeout is far too long to
+			// notice a dead hub connection in time. Send an empty report so a
+			// broken stream errors out here and the caller reconnects before
+			// the real report is due; the hub ignores reports with no fields.
+			if err := g.sendReport(rpCli, client, submissionId, &grader_pb.GradeReport{}, logger); err != nil {
+				if _, recvErr := rpCli.CloseAndRecv(); recvErr != nil {
+					err = recvErr
+				}
+				return g.shouldRetryCallback(submissionId, err, logger), err
+			}
+			continue
 		}
 		*reports = append(*reports, pending...)
 	}
@@ -753,9 +763,10 @@ func (g *GraderWorker) authOutgoing(ctx context.Context) context.Context {
 
 func (g *GraderWorker) getNewClient() (*grpc.ClientConn, grader_pb.GraderHubServiceClient) {
 	keep := keepalive.ClientParameters{PermitWithoutStream: true, Time: 5 * time.Second, Timeout: 1 * time.Hour}
-	conn, err := grpc.Dial(
+	// NewClient does not dial eagerly; a hub that is down surfaces as an
+	// Unavailable error on the first RPC, which every caller retries.
+	conn, err := grpc.NewClient(
 		g.hubAddress,
-		grpc.WithBlock(),
 		grpc.WithKeepaliveParams(keep),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(
@@ -797,6 +808,11 @@ func (g *GraderWorker) WorkLoop() {
 	}
 	zap.L().Info("Grader.RegisterRequest", zap.Stringer("request", registerRequest))
 	conn, client := g.getNewClient()
+	if conn == nil {
+		// Only fails on an invalid target/option, not on an unreachable hub
+		// (that surfaces as an Unavailable error on the RPC and is retried).
+		zap.L().Fatal("Hub.Dial", zap.String("target", g.hubAddress))
+	}
 	defer conn.Close()
 	for {
 		resp, err := client.RegisterGrader(g.authOutgoing(context.Background()), registerRequest)

@@ -11,7 +11,8 @@ For documentation, please head for [https://autograder-docs.howardlau.me](https:
 
 ## Build
 
-Go 1.24+ is needed for building the server.
+Go 1.26+ is needed for building the server (go.mod pins 1.26.6; newer Go
+toolchains download it automatically).
 
 To build without client-side webpage code (which means you need a reverse-proxy like nginx to serve the static contents)
 

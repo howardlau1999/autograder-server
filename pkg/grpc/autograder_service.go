@@ -29,10 +29,10 @@ import (
 
 	"github.com/avast/retry-go"
 	"github.com/cockroachdb/pebble"
-	"github.com/go-chi/chi"
+	"github.com/go-chi/chi/v5"
 	"github.com/gogo/protobuf/sortkeys"
-	"github.com/golang-jwt/jwt"
-	"github.com/google/go-github/v42/github"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/go-github/v74/github"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/kataras/hcaptcha"
 	"github.com/spf13/viper"
@@ -982,7 +982,7 @@ func (a *AutograderService) CreateSubmission(
 }
 
 type ProtobufClaim struct {
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 	Payload string `json:"payload"`
 }
 
@@ -993,8 +993,11 @@ func (a *AutograderService) signPayloadToken(key []byte, payload proto.Message, 
 	}
 	now := time.Now()
 	claims := ProtobufClaim{
-		Payload:        base64.StdEncoding.EncodeToString(raw),
-		StandardClaims: jwt.StandardClaims{IssuedAt: now.Unix(), ExpiresAt: expireAt.Unix()},
+		Payload: base64.StdEncoding.EncodeToString(raw),
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expireAt),
+		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
 	ss, err := token.SignedString(key)
@@ -1375,20 +1378,20 @@ func (a *AutograderService) runUnfinishedSubmissions() {
 
 func (a *AutograderService) parseTokenPayload(key []byte, tokenString string) ([]byte, error) {
 	token, err := jwt.Parse(
-		tokenString, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-
+		tokenString,
+		func(token *jwt.Token) (interface{}, error) {
 			return key, nil
 		},
+		// Pin the accepted algorithm instead of trusting the token header;
+		// Parse also enforces the exp claim.
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS512.Alg()}),
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok || !token.Valid || claims.Valid() != nil {
+	if !ok || !token.Valid {
 		return nil, errors.New("claim not valid")
 	}
 	payloadString, ok := claims["payload"].(string)
