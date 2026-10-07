@@ -10,10 +10,10 @@ type KVExportRepository struct {
 	seq Sequencer
 }
 
-func NewKVExportRepository(db *pebble.DB) ExportRepository {
+func NewKVExportRepository(db *pebble.DB) (ExportRepository, error) {
 	seq, err := NewKVSequencer(db, []byte("export:next_id"))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return &KVExportRepository{db: db, seq: seq}
+	return &KVExportRepository{db: db, seq: seq}, nil
 }

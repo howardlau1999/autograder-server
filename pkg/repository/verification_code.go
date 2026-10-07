@@ -16,17 +16,24 @@ import (
 type VerificationCodeRepository interface {
 	Issue(ctx context.Context, typ string, key string, code string, expireAt time.Time) error
 	Validate(ctx context.Context, typ string, key string, code string) (bool, error)
-	GarbageCollect()
+	// GarbageCollect sweeps expired codes every 10 seconds until ctx is
+	// cancelled, then returns.
+	GarbageCollect(ctx context.Context)
 }
 
 type KVVerificationCodeRepository struct {
 	db *pebble.DB
 }
 
-func (vr *KVVerificationCodeRepository) GarbageCollect() {
+func (vr *KVVerificationCodeRepository) GarbageCollect(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		prefix := []byte("verification_code:")
 		iter := vr.db.NewIter(PrefixIterOptions(prefix))
 		for iter.First(); iter.Valid(); iter.Next() {
@@ -44,7 +51,9 @@ func (vr *KVVerificationCodeRepository) GarbageCollect() {
 				}
 			}
 		}
-		_ = iter.Close()
+		if err := iter.Close(); err != nil {
+			zap.L().Error("VerificationCode.GC.Close", zap.Error(err))
+		}
 	}
 }
 

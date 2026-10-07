@@ -88,10 +88,10 @@ func (sr *KVSubmissionRepository) GetSubmission(ctx context.Context, id uint64) 
 	return submission, nil
 }
 
-func NewKVSubmissionRepository(db *pebble.DB) SubmissionRepository {
+func NewKVSubmissionRepository(db *pebble.DB) (SubmissionRepository, error) {
 	seq, err := NewKVSequencer(db, []byte("submission:next_id"))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return &KVSubmissionRepository{db: db, seq: seq}
+	return &KVSubmissionRepository{db: db, seq: seq}, nil
 }

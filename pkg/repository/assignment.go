@@ -61,10 +61,10 @@ func (ar *KVAssignmentRepository) GetAssignment(ctx context.Context, id uint64) 
 	return assignment, nil
 }
 
-func NewKVAssignmentRepository(db *pebble.DB) AssignmentRepository {
+func NewKVAssignmentRepository(db *pebble.DB) (AssignmentRepository, error) {
 	seq, err := NewKVSequencer(db, []byte("assignment:next_id"))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return &KVAssignmentRepository{db: db, seq: seq}
+	return &KVAssignmentRepository{db: db, seq: seq}, nil
 }

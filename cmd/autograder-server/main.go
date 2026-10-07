@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -13,7 +14,9 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	autograder_pb "autograder-server/pkg/api/proto"
@@ -72,6 +75,10 @@ const initialConfig = `
     user=""
     pass=""
     from=""
+    # Connection security: "implicit" (TLS from the start, e.g. port 465),
+    # "starttls" (plain connect upgraded via STARTTLS, e.g. port 587), or
+    # "none" (plain; credentials are only sent to a localhost server).
+    tls-mode="implicit"
 
 [mailgun]
 	enabled = false
@@ -130,29 +137,31 @@ func RandStringRunes(n int) string {
 	return string(b)
 }
 
-func dbInit(db *pebble.DB, email string) bool {
+func dbInit(db *pebble.DB, email string) error {
 	if !isDatabaseUninitialized(db) {
-		log.Printf("Database is already initialized. If you want to initialize again please delete the database manually.")
-		return false
+		return fmt.Errorf(
+			"database is already initialized; delete it manually to re-initialize",
+		)
 	}
 	rootPassword := RandStringRunes(16)
-	userRepo := repository.NewKVUserRepository(db)
+	userRepo, err := repository.NewKVUserRepository(db)
+	if err != nil {
+		return err
+	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(rootPassword), bcrypt.DefaultCost)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	rootUser := &model_pb.User{Username: "root", Password: passwordHash, Email: email, Nickname: "root", IsAdmin: true}
-	_, err = userRepo.CreateUser(context.Background(), rootUser)
-	if err != nil {
-		panic(err)
+	if _, err = userRepo.CreateUser(context.Background(), rootUser); err != nil {
+		return err
 	}
-	err = db.Set(initializeMarker, nil, pebble.Sync)
-	if err != nil {
-		panic(err)
+	if err = db.Set(initializeMarker, nil, pebble.Sync); err != nil {
+		return err
 	}
 
 	log.Printf("Database initialized. Root user information\nUsername: root\nPassword: %s", rootPassword)
-	return true
+	return nil
 }
 
 type ServerEnvKeyReplacer struct {
@@ -186,7 +195,12 @@ func serverReadConfig() {
 
 	err := viper.ReadInConfig()
 	if err != nil {
-		panic(err)
+		// A missing config file is fine (defaults and environment variables
+		// still apply); anything else means the file exists but is unusable.
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			log.Fatalf("Failed to read config file: %v", err)
+		}
 	}
 }
 
@@ -229,10 +243,10 @@ func isDatabaseUninitialized(db *pebble.DB) bool {
 	return err == pebble.ErrNotFound
 }
 
-func initEmbeddedStaticWebResources(router chi.Router) {
+func initEmbeddedStaticWebResources(router chi.Router) error {
 	distFS, err := fs.Sub(web.WebResources, "dist")
 	if err != nil {
-		panic(err)
+		return err
 	}
 	providedTokens := &ServerProvidedTokens{
 		ServerProvided:  "true",
@@ -243,15 +257,17 @@ func initEmbeddedStaticWebResources(router chi.Router) {
 	var writeTemplate func(w http.ResponseWriter, r *http.Request)
 	if err == nil {
 		rendered := &bytes.Buffer{}
-		err = tmpl.Execute(rendered, providedTokens)
-		if err != nil {
-			panic(err)
+		if err = tmpl.Execute(rendered, providedTokens); err != nil {
+			zap.L().Error("Web.Template.Execute", zap.Error(err))
+		} else {
+			indexHTML := rendered.Bytes()
+			writeTemplate = func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(indexHTML)
+			}
 		}
-		indexHTML := rendered.Bytes()
-		writeTemplate = func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(indexHTML)
-		}
+	} else {
+		zap.L().Warn("Web.Template.Parse", zap.Error(err))
 	}
 	fsrv := http.FileServer(http.FS(distFS))
 
@@ -273,6 +289,7 @@ func initEmbeddedStaticWebResources(router chi.Router) {
 			}
 		},
 	)
+	return nil
 }
 
 func processCommandLineOptions() bool {
@@ -297,15 +314,15 @@ func processCommandLineOptions() bool {
 	if isInit {
 		db, err := pebble.Open(viper.GetString("db.local.path"), &pebble.Options{Merger: repository.NewKVMerger()})
 		if err != nil {
-			panic(err)
+			log.Fatalf("Failed to open database: %v", err)
 		}
+		defer db.Close()
 		if initEmail == "" {
 			log.Printf("Please provide email.")
 			return true
 		}
-		success := dbInit(db, initEmail)
-		if !success {
-			return true
+		if err := dbInit(db, initEmail); err != nil {
+			log.Fatalf("Failed to initialize database: %v", err)
 		}
 		return true
 	}
@@ -326,6 +343,7 @@ func main() {
 	if err != nil {
 		zap.L().Fatal("DB.Open", zap.Error(err))
 	}
+	defer db.Close()
 	if isDatabaseUninitialized(db) {
 		log.Printf("Database is not initialized. Please run autograder-server --init first.")
 		return
@@ -350,8 +368,13 @@ func main() {
 	if viper.GetBool("mailgun.enabled") {
 		m = mailer.NewMailgunMailer(viper.GetString("mailgun.domain"), viper.GetString("mailgun.api-key"))
 	} else {
+		smtpTLSMode, err := mailer.ParseSMTPTLSMode(viper.GetString("smtp.tls-mode"))
+		if err != nil {
+			zap.L().Fatal("SMTP.TLSMode.Invalid", zap.Error(err))
+		}
 		m = mailer.NewSMTPMailer(
 			viper.GetString("smtp.addr"), viper.GetString("smtp.user"), viper.GetString("smtp.pass"),
+			smtpTLSMode,
 		)
 	}
 	hcaptchaClient := hcaptcha.New(viper.GetString("hcaptcha.secret-key"))
@@ -407,7 +430,13 @@ func main() {
 	kaep := keepalive.EnforcementPolicy{PermitWithoutStream: true, MinTime: 1 * time.Second}
 	ksap := keepalive.ServerParameters{Time: 5 * time.Second, Timeout: 1 * time.Hour}
 	srr := repository.NewKVSubmissionReportRepository(db)
-	graderHubService := grader_grpc.NewGraderHubService(db, srr, viper.GetString("hub.token"), heartbeatTimeout)
+	graderHubService, err := grader_grpc.NewGraderHubService(
+		db, srr, viper.GetString("hub.token"), heartbeatTimeout,
+	)
+	if err != nil {
+		zap.L().Fatal("GraderHub.Init", zap.Error(err))
+	}
+	defer graderHubService.Close()
 	graderHubServer := grpc.NewServer(
 		grpc.KeepaliveEnforcementPolicy(kaep),
 		grpc.KeepaliveParams(ksap),
@@ -428,9 +457,13 @@ func main() {
 			grpc_recovery.StreamServerInterceptor(),
 		),
 	)
-	autograderService := autograder_grpc.NewAutograderServiceServer(
+	autograderService, err := autograder_grpc.NewAutograderServiceServer(
 		db, localStorage, m, hcaptchaClient, githubOauth2Config, srr, graderHubService,
 	)
+	if err != nil {
+		zap.L().Fatal("AutograderService.Init", zap.Error(err))
+	}
+	defer autograderService.Close()
 	autograder_pb.RegisterAutograderServiceServer(autograderServer, autograderService)
 	grader_pb.RegisterGraderHubServiceServer(graderHubServer, graderHubService)
 	wrappedGrpc := grpcweb.WrapServer(
@@ -461,7 +494,9 @@ func main() {
 		"/AutograderService/FileDownload/{filename}",
 		corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileDownload)).ServeHTTP,
 	)
-	initEmbeddedStaticWebResources(router)
+	if err := initEmbeddedStaticWebResources(router); err != nil {
+		zap.L().Fatal("Web.Init", zap.Error(err))
+	}
 
 	// Communicate with graders
 	graderHubPort := viper.GetInt("hub.port")
@@ -482,8 +517,9 @@ func main() {
 	zap.L().Info("Metrics.Listen", zap.Int("port", metricsPort))
 	metricsRouter := chi.NewRouter()
 	metricsRouter.Handle(viper.GetString("metrics.path"), promhttp.Handler())
+	metricsSrv := &http.Server{Addr: fmt.Sprintf(":%d", metricsPort), Handler: metricsRouter}
 	go func() {
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", metricsPort), metricsRouter); err != nil {
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			zap.L().Error("Metrics.Serve", zap.Error(err))
 		}
 	}()
@@ -505,17 +541,20 @@ func main() {
 	}
 	fileSrvRouter.Post("/*", verifyHTTPFSToken(autograderService.PushFile))
 	fileSrvRouter.Get("/*", verifyHTTPFSToken(http.FileServer(http.Dir(localStorageDir)).ServeHTTP))
+	fileSrv := &http.Server{Addr: fmt.Sprintf(":%d", httpFSPort), Handler: fileSrvRouter}
 	go func() {
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", httpFSPort), fileSrvRouter); err != nil {
+		if err := fileSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			zap.L().Fatal("HTTPFS.Serve", zap.Error(err))
 		}
 	}()
 
 	// The pprof debug endpoints are only exposed in development, bound to
 	// localhost, so they are never reachable in production.
+	var pprofSrv *http.Server
 	if viper.GetBool("server.development") {
+		pprofSrv = &http.Server{Addr: "127.0.0.1:54321", Handler: http.DefaultServeMux}
 		go func() {
-			if err := http.ListenAndServe("127.0.0.1:54321", http.DefaultServeMux); err != nil {
+			if err := pprofSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				zap.L().Error("Pprof.Serve", zap.Error(err))
 			}
 		}()
@@ -523,7 +562,41 @@ func main() {
 
 	port := viper.GetInt("web.port")
 	zap.L().Info("Web.Listen", zap.Int("port", port))
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), router); err != nil {
-		zap.L().Fatal("Web.Serve", zap.Error(err))
+	webSrv := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: router}
+	go func() {
+		if err := webSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			zap.L().Fatal("Web.Serve", zap.Error(err))
+		}
+	}()
+
+	// Block until SIGINT/SIGTERM, then shut down in dependency order: stop the
+	// background goroutines first, drain HTTP and gRPC, close the database last.
+	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-runCtx.Done()
+	zap.L().Info("Server.Shutdown")
+	autograderService.Close()
+	graderHubService.Close()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, srv := range []*http.Server{webSrv, metricsSrv, fileSrv, pprofSrv} {
+		if srv == nil {
+			continue
+		}
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			zap.L().Error("Server.Shutdown.Error", zap.String("addr", srv.Addr), zap.Error(err))
+		}
+	}
+	grpcDone := make(chan struct{})
+	go func() {
+		autograderServer.GracefulStop()
+		graderHubServer.GracefulStop()
+		close(grpcDone)
+	}()
+	select {
+	case <-grpcDone:
+	case <-shutdownCtx.Done():
+		autograderServer.Stop()
+		graderHubServer.Stop()
 	}
 }

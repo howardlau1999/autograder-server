@@ -67,6 +67,11 @@ type AutograderService struct {
 	userJWTSignKey       []byte
 	uploadJWTSignKey     []byte
 	downloadJWTSignKey   []byte
+
+	// gcCtx governs the background goroutines started by the constructor
+	// (unfinished-submission replay, manifest GC); Close cancels it.
+	gcCtx    context.Context
+	gcCancel context.CancelFunc
 }
 
 var ResetCodeMax = 900000
@@ -78,6 +83,10 @@ const PasswordResetRepoType = "password_reset"
 const SignUpSubject = "Autograder 注册验证码"
 const SignUpTemplate = "您的注册验证码为：%s，10 分钟内有效。\nAutograder"
 const SignUpRepoType = "sign_up"
+
+// errIncorrectPassword aborts an atomic user update (without writing) when the
+// supplied old password does not match the stored hash.
+var errIncorrectPassword = errors.New("incorrect password")
 
 var UsernameRegExp = regexp.MustCompile("^[a-zA-Z0-9][a-zA-Z0-9_-]{1,40}$")
 var EmailCodeValidDuration = 10 * time.Minute
@@ -115,7 +124,7 @@ func (a *AutograderService) ResetPassword(
 	if err := a.validateEmailCode(ctx, PasswordResetRepoType, email, code); err != nil {
 		return nil, err
 	}
-	user, userId, err := a.userRepo.GetUserByEmail(ctx, email)
+	_, userId, err := a.userRepo.GetUserByEmail(ctx, email)
 	if err != nil {
 		l.Error("ResetPassword.GetUser", zap.String("email", email), zap.Error(err))
 		return nil, status.Error(codes.NotFound, "EMAIL")
@@ -123,12 +132,14 @@ func (a *AutograderService) ResetPassword(
 	if len(request.GetPassword()) < 8 {
 		return nil, status.Error(codes.InvalidArgument, "PASSWORD")
 	}
-	user.Password, err = bcrypt.GenerateFromPassword([]byte(request.GetPassword()), bcrypt.DefaultCost)
-	if err != nil {
-		l.Error("ResetPassword.Hash", zap.String("email", email), zap.Error(err))
-		return nil, status.Error(codes.Internal, "INTERNAL_ERROR")
-	}
-	err = a.userRepo.UpdateUser(ctx, userId, user)
+	err = a.userRepo.UpdateUserAtomic(ctx, userId, func(user *model_pb.User) error {
+		hashed, err := bcrypt.GenerateFromPassword([]byte(request.GetPassword()), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+		user.Password = hashed
+		return nil
+	})
 	if err != nil {
 		l.Error("ResetPassword.UpdateUser", zap.String("email", email), zap.Error(err))
 		return nil, status.Error(codes.Internal, "INTERNAL_ERROR")
@@ -591,7 +602,7 @@ func (a *AutograderService) CreateCourse(
 		return nil, status.Error(codes.InvalidArgument, "SHORT_NAME")
 	}
 	if len(request.GetDescription()) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "description")
+		return nil, status.Error(codes.InvalidArgument, "DESCRIPTION")
 	}
 
 	course := &model_pb.Course{
@@ -1045,7 +1056,7 @@ func (a *AutograderService) InitUpload(
 func (a *AutograderService) SubscribeSubmission(
 	request *autograder_pb.SubscribeSubmissionRequest, server autograder_pb.AutograderService_SubscribeSubmissionServer,
 ) error {
-	ctx, err := a.AuthFunc(server.Context(), request, "/AutograderService/SubscribeSubmission")
+	ctx, err := a.AuthFunc(server.Context(), request, autograder_pb.AutograderService_SubscribeSubmission_FullMethodName)
 	if err != nil {
 		return err
 	}
@@ -1343,7 +1354,7 @@ func (a *AutograderService) runSubmission(ctx context.Context, submissionId uint
 }
 
 func (a *AutograderService) runUnfinishedSubmissions() {
-	ctx := context.Background()
+	ctx := a.gcCtx
 	ids, err := a.submissionReportRepo.GetUnfinishedSubmissions(ctx)
 	if err != nil {
 		// This runs in a background goroutine with no recover above it, so a
@@ -1732,19 +1743,17 @@ func (a *AutograderService) UpdateUser(
 	ctx context.Context, request *autograder_pb.UpdateUserRequest,
 ) (*autograder_pb.UpdateUserResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
-	dbUser, err := a.userRepo.GetUserById(ctx, user.GetUserId())
-	if err != nil {
-		return nil, status.Error(codes.Internal, "GET_USER")
-	}
-	dbUser.Nickname = request.GetNickname()
-	dbUser.StudentId = request.GetStudentId()
-	if len(dbUser.Nickname) > 16 {
+	if len(request.GetNickname()) > 16 {
 		return nil, status.Error(codes.InvalidArgument, "NICKNAME_TOO_LONG")
 	}
-	if len(dbUser.StudentId) > 16 {
+	if len(request.GetStudentId()) > 16 {
 		return nil, status.Error(codes.InvalidArgument, "STUDENT_ID_TOO_LONG")
 	}
-	err = a.userRepo.UpdateUser(ctx, user.GetUserId(), dbUser)
+	err := a.userRepo.UpdateUserAtomic(ctx, user.GetUserId(), func(dbUser *model_pb.User) error {
+		dbUser.Nickname = request.GetNickname()
+		dbUser.StudentId = request.GetStudentId()
+		return nil
+	})
 	if err != nil {
 		return &autograder_pb.UpdateUserResponse{Success: false}, nil
 	}
@@ -1755,20 +1764,24 @@ func (a *AutograderService) UpdatePassword(
 	ctx context.Context, request *autograder_pb.UpdatePasswordRequest,
 ) (*autograder_pb.UpdatePasswordResponse, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
-	dbUser, err := a.userRepo.GetUserById(ctx, user.GetUserId())
-	if err != nil {
-		return nil, status.Error(codes.Internal, "GET_USER")
-	}
-	if err := bcrypt.CompareHashAndPassword(dbUser.Password, []byte(request.OldPassword)); err != nil {
+	err := a.userRepo.UpdateUserAtomic(ctx, user.GetUserId(), func(dbUser *model_pb.User) error {
+		if err := bcrypt.CompareHashAndPassword(dbUser.Password, []byte(request.OldPassword)); err != nil {
+			return errIncorrectPassword
+		}
+		hashed, err := bcrypt.GenerateFromPassword([]byte(request.NewPassword), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+		dbUser.Password = hashed
+		return nil
+	})
+	if errors.Is(err, errIncorrectPassword) {
 		return &autograder_pb.UpdatePasswordResponse{Success: false}, nil
 	}
-	dbUser.Password, err = bcrypt.GenerateFromPassword([]byte(request.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "PASSWORD_HASH")
-	}
-	err = a.userRepo.UpdateUser(ctx, user.GetUserId(), dbUser)
-	if err != nil {
-		return &autograder_pb.UpdatePasswordResponse{Success: false}, nil
+		l := ctxzap.Extract(ctx)
+		l.Error("UpdatePassword.UpdateUser", zap.Error(err))
+		return nil, status.Error(codes.Internal, "INTERNAL_ERROR")
 	}
 	return &autograder_pb.UpdatePasswordResponse{Success: true}, nil
 }
@@ -2015,7 +2028,7 @@ func (a *AutograderService) CancelSubmission(
 }
 
 func (a *AutograderService) manifestGarbageCollect() {
-	ctx := context.Background()
+	ctx := a.gcCtx
 	ch := make(chan uint64)
 	zap.L().Debug("Manifest.GC.Start")
 	go a.manifestRepo.GarbageCollect(ctx, ch)
@@ -2084,12 +2097,10 @@ func (a *AutograderService) SetAdmin(
 	if request.GetUserId() == 1 {
 		return nil, status.Error(codes.InvalidArgument, "CANNOT_MODIFY_ROOT")
 	}
-	user, err := a.userRepo.GetUserById(ctx, request.GetUserId())
-	if err != nil {
-		return nil, status.Error(codes.Internal, "GET_USER")
-	}
-	user.IsAdmin = request.GetIsAdmin()
-	err = a.userRepo.UpdateUser(ctx, request.GetUserId(), user)
+	err := a.userRepo.UpdateUserAtomic(ctx, request.GetUserId(), func(user *model_pb.User) error {
+		user.IsAdmin = request.GetIsAdmin()
+		return nil
+	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, "UPDATE_USER")
 	}
@@ -2100,7 +2111,7 @@ func (a *AutograderService) StreamLog(
 	request *autograder_pb.WebStreamLogRequest,
 	server autograder_pb.AutograderService_StreamLogServer,
 ) error {
-	ctx, err := a.AuthFunc(server.Context(), request, "/AutograderService/StreamLog")
+	ctx, err := a.AuthFunc(server.Context(), request, autograder_pb.AutograderService_StreamLog_FullMethodName)
 	if err != nil {
 		return err
 	}
@@ -2141,14 +2152,35 @@ func NewAutograderServiceServer(
 	ghOauth2Config *oauth2.Config,
 	srr repository.SubmissionReportRepository,
 	graderHubSvc *grader_grpc.GraderHubService,
-) *AutograderService {
+) (*AutograderService, error) {
+	manifestRepo, err := repository.NewKVManifestRepository(db)
+	if err != nil {
+		return nil, fmt.Errorf("manifest repository: %w", err)
+	}
+	userRepo, err := repository.NewKVUserRepository(db)
+	if err != nil {
+		return nil, fmt.Errorf("user repository: %w", err)
+	}
+	submissionRepo, err := repository.NewKVSubmissionRepository(db)
+	if err != nil {
+		return nil, fmt.Errorf("submission repository: %w", err)
+	}
+	courseRepo, err := repository.NewKVCourseRepository(db)
+	if err != nil {
+		return nil, fmt.Errorf("course repository: %w", err)
+	}
+	assignmentRepo, err := repository.NewKVAssignmentRepository(db)
+	if err != nil {
+		return nil, fmt.Errorf("assignment repository: %w", err)
+	}
+	gcCtx, gcCancel := context.WithCancel(context.Background())
 	a := &AutograderService{
-		manifestRepo:         repository.NewKVManifestRepository(db),
-		userRepo:             repository.NewKVUserRepository(db),
-		submissionRepo:       repository.NewKVSubmissionRepository(db),
+		manifestRepo:         manifestRepo,
+		userRepo:             userRepo,
+		submissionRepo:       submissionRepo,
 		submissionReportRepo: srr,
-		courseRepo:           repository.NewKVCourseRepository(db),
-		assignmentRepo:       repository.NewKVAssignmentRepository(db),
+		courseRepo:           courseRepo,
+		assignmentRepo:       assignmentRepo,
 		leaderboardRepo:      repository.NewKVLeaderboardRepository(db),
 		verificationCodeRepo: repository.NewKVVerificationCodeRepository(db),
 		progGrader:           grader.NewHubGrader(graderHubSvc),
@@ -2160,10 +2192,18 @@ func NewAutograderServiceServer(
 		userJWTSignKey:       []byte(viper.GetString("token.secret.session")),
 		uploadJWTSignKey:     []byte(viper.GetString("token.secret.upload")),
 		downloadJWTSignKey:   []byte(viper.GetString("token.secret.download")),
+		gcCtx:                gcCtx,
+		gcCancel:             gcCancel,
 	}
 	a.initAuthFuncs()
 	go a.runUnfinishedSubmissions()
 	go a.manifestGarbageCollect()
-	go a.verificationCodeRepo.GarbageCollect()
-	return a
+	go a.verificationCodeRepo.GarbageCollect(a.gcCtx)
+	return a, nil
+}
+
+// Close stops the background goroutines started by the constructor. It does
+// not close the underlying database.
+func (a *AutograderService) Close() {
+	a.gcCancel()
 }

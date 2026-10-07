@@ -170,10 +170,10 @@ func (cr *KVCourseRepository) GetCourse(ctx context.Context, id uint64) (*model_
 	return course, nil
 }
 
-func NewKVCourseRepository(db *pebble.DB) CourseRepository {
+func NewKVCourseRepository(db *pebble.DB) (CourseRepository, error) {
 	seq, err := NewKVSequencer(db, []byte("course:next_id"))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return &KVCourseRepository{db: db, seq: seq}
+	return &KVCourseRepository{db: db, seq: seq}, nil
 }

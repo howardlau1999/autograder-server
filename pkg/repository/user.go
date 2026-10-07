@@ -15,7 +15,10 @@ import (
 
 type UserRepository interface {
 	CreateUser(ctx context.Context, user *model_pb.User) (uint64, error)
-	UpdateUser(ctx context.Context, id uint64, user *model_pb.User) error
+	// UpdateUserAtomic reads the user, applies mutate, and writes the result
+	// back under a lock, so concurrent read-modify-write updates (nickname,
+	// password, admin flag, ...) cannot lose each other's changes.
+	UpdateUserAtomic(ctx context.Context, id uint64, mutate func(*model_pb.User) error) error
 	GetUserIdByUsername(ctx context.Context, username string) (uint64, error)
 	GetUserByUsername(ctx context.Context, username string) (*model_pb.User, uint64, error)
 	GetUserById(ctx context.Context, id uint64) (*model_pb.User, error)
@@ -36,6 +39,7 @@ type KVUserRepository struct {
 	db       *pebble.DB
 	seq      Sequencer
 	createMu sync.Mutex
+	updateMu sync.Mutex
 }
 
 func (ur *KVUserRepository) GetAllUsers(ctx context.Context) ([]uint64, []*model_pb.User, error) {
@@ -177,13 +181,12 @@ func (ur *KVUserRepository) GetUserByEmail(ctx context.Context, email string) (*
 }
 
 func (ur *KVUserRepository) UnbindGithubId(ctx context.Context, userId uint64) error {
-	user, err := ur.GetUserById(ctx, userId)
-	if err != nil {
-		return err
-	}
-	githubId := user.GetGithubId()
-	user.GithubId = ""
-	err = ur.UpdateUser(ctx, userId, user)
+	var githubId string
+	err := ur.UpdateUserAtomic(ctx, userId, func(user *model_pb.User) error {
+		githubId = user.GetGithubId()
+		user.GithubId = ""
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -194,12 +197,10 @@ func (ur *KVUserRepository) UnbindGithubId(ctx context.Context, userId uint64) e
 }
 
 func (ur *KVUserRepository) BindGithubId(ctx context.Context, userId uint64, githubId string) error {
-	user, err := ur.GetUserById(ctx, userId)
-	if err != nil {
-		return err
-	}
-	user.GithubId = githubId
-	err = ur.UpdateUser(ctx, userId, user)
+	err := ur.UpdateUserAtomic(ctx, userId, func(user *model_pb.User) error {
+		user.GithubId = githubId
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -246,9 +247,14 @@ func (ur *KVUserRepository) CreateUser(ctx context.Context, user *model_pb.User)
 	return id, nil
 }
 
-func (ur *KVUserRepository) UpdateUser(ctx context.Context, id uint64, user *model_pb.User) error {
-	_, err := ur.GetUserById(ctx, id)
+func (ur *KVUserRepository) UpdateUserAtomic(ctx context.Context, id uint64, mutate func(*model_pb.User) error) error {
+	ur.updateMu.Lock()
+	defer ur.updateMu.Unlock()
+	user, err := ur.GetUserById(ctx, id)
 	if err != nil {
+		return err
+	}
+	if err := mutate(user); err != nil {
 		return err
 	}
 	raw, err := proto.Marshal(user)
@@ -285,7 +291,10 @@ func (ur *KVUserRepository) GetUserById(ctx context.Context, id uint64) (*model_
 	return user, nil
 }
 
-func NewKVUserRepository(db *pebble.DB) UserRepository {
-	seq, _ := NewKVSequencer(db, []byte("user:next_id"))
-	return &KVUserRepository{db: db, seq: seq}
+func NewKVUserRepository(db *pebble.DB) (UserRepository, error) {
+	seq, err := NewKVSequencer(db, []byte("user:next_id"))
+	if err != nil {
+		return nil, err
+	}
+	return &KVUserRepository{db: db, seq: seq}, nil
 }

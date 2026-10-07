@@ -16,7 +16,10 @@ func TestDockerProgrammingGrader(t *testing.T) {
 		t.Skip("skipping docker integration test in short mode")
 	}
 
-	dockerGrader := NewDockerProgrammingGrader(1)
+	dockerGrader, err := NewDockerProgrammingGrader(1)
+	if err != nil {
+		t.Fatalf("failed to create docker grader: %v", err)
+	}
 	if _, err := dockerGrader.cli.Ping(context.Background()); err != nil {
 		t.Skipf("docker daemon not available: %v", err)
 	}

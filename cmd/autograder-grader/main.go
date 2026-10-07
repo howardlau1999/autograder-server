@@ -778,7 +778,11 @@ func (g *GraderWorker) getNewClient() (*grpc.ClientConn, grader_pb.GraderHubServ
 func (g *GraderWorker) WorkLoop() {
 	var graderId uint64
 	concurrency := uint64(viper.GetUint("grader.concurrency"))
-	g.dockerGrader = grader.NewDockerProgrammingGrader(int(concurrency))
+	dockerGrader, err := grader.NewDockerProgrammingGrader(int(concurrency))
+	if err != nil {
+		zap.L().Fatal("Docker.Client", zap.Error(err))
+	}
+	g.dockerGrader = dockerGrader
 	tags := strings.Split(viper.GetString("grader.tags"), ",")
 	for i := 0; i < len(tags); i++ {
 		tags[i] = strings.TrimSpace(tags[i])

@@ -3,9 +3,6 @@ package grpc
 import (
 	"context"
 	"fmt"
-	"reflect"
-	"runtime"
-	"strings"
 	"time"
 
 	autograder_pb "autograder-server/pkg/api/proto"
@@ -20,8 +17,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
-
-const ServerPrefix = "/AutograderService/"
 
 type userInfoCtxKey struct{}
 
@@ -60,10 +55,6 @@ type ServiceAuthFunc interface {
 }
 
 type MethodAuthFunc func(context.Context, interface{}) (context.Context, error)
-
-func getFullName(method string) string {
-	return fmt.Sprintf("%s%s", ServerPrefix, method)
-}
 
 func (a *AutograderService) NoopAuth(ctx context.Context, req interface{}) (context.Context, error) {
 	return ctx, nil
@@ -238,120 +229,122 @@ func (a *AutograderService) NotAfterDueDate(ctx context.Context, req interface{}
 	return ctx, nil
 }
 
-func getFunctionName(f interface{}) string {
-	name := runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name()
-	parts := strings.Split(name, ".")
-	name = parts[len(parts)-1]
-	return name
-}
-
+// initAuthFuncs builds the method -> auth chain table. Keys are the generated
+// full method names, so a renamed or removed RPC fails to compile here instead
+// of silently dropping out of the table; TestAuthTableCoversEveryMethod checks
+// the converse, that every RPC in the service descriptor has an entry.
 func (a *AutograderService) initAuthFuncs() {
 	a.authFuncs = map[string][]MethodAuthFunc{}
 	authMaps := []struct {
-		Methods   []interface{}
+		Methods   []string
 		AuthFuncs []MethodAuthFunc
 	}{
 		{
-			Methods: []interface{}{
-				(*AutograderService).Login,
-				(*AutograderService).SignUp,
-				(*AutograderService).ResetPassword,
-				(*AutograderService).GithubLogin,
+			Methods: []string{
+				autograder_pb.AutograderService_Login_FullMethodName,
+				autograder_pb.AutograderService_SignUp_FullMethodName,
+				autograder_pb.AutograderService_ResetPassword_FullMethodName,
+				autograder_pb.AutograderService_GithubLogin_FullMethodName,
 			},
 			AuthFuncs: []MethodAuthFunc{a.NoopAuth},
 		},
 		{
-			Methods: []interface{}{
-				(*AutograderService).RequestPasswordReset,
-				(*AutograderService).RequestSignUpToken,
+			Methods: []string{
+				autograder_pb.AutograderService_RequestPasswordReset_FullMethodName,
+				autograder_pb.AutograderService_RequestSignUpToken_FullMethodName,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireCaptcha},
 		},
 		{
-			Methods: []interface{}{
-				(*AutograderService).GetCourseList,
-				(*AutograderService).GetUser,
-				(*AutograderService).BindGithub,
-				(*AutograderService).UnbindGithub,
-				(*AutograderService).UpdateUser,
-				(*AutograderService).UpdatePassword,
-				(*AutograderService).JoinCourse,
+			Methods: []string{
+				autograder_pb.AutograderService_GetCourseList_FullMethodName,
+				autograder_pb.AutograderService_GetUser_FullMethodName,
+				autograder_pb.AutograderService_BindGithub_FullMethodName,
+				autograder_pb.AutograderService_UnbindGithub_FullMethodName,
+				autograder_pb.AutograderService_UpdateUser_FullMethodName,
+				autograder_pb.AutograderService_UpdatePassword_FullMethodName,
+				autograder_pb.AutograderService_JoinCourse_FullMethodName,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin},
 		},
 		{
-			Methods: []interface{}{
-				(*AutograderService).InitUpload,
-				(*AutograderService).DeleteFileInManifest,
+			Methods: []string{
+				autograder_pb.AutograderService_InitUpload_FullMethodName,
+				autograder_pb.AutograderService_DeleteFileInManifest_FullMethodName,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.CheckManifest},
 		},
 		{
-			Methods: []interface{}{
-				(*AutograderService).GetAllGraders,
-				(*AutograderService).SearchUser,
-				(*AutograderService).SetAdmin,
-				(*AutograderService).CreateCourse,
-				(*AutograderService).GetAllUsers,
-				(*AutograderService).GetAllCourses,
+			Methods: []string{
+				autograder_pb.AutograderService_GetAllGraders_FullMethodName,
+				autograder_pb.AutograderService_SearchUser_FullMethodName,
+				autograder_pb.AutograderService_SetAdmin_FullMethodName,
+				autograder_pb.AutograderService_CreateCourse_FullMethodName,
+				autograder_pb.AutograderService_GetAllUsers_FullMethodName,
+				autograder_pb.AutograderService_GetAllCourses_FullMethodName,
+				// Declared in proto since 2022 but never implemented (calls
+				// hit the embedded Unimplemented server). Registered so the
+				// table stays exhaustive and they are protected if implemented.
+				autograder_pb.AutograderService_RemoveGrader_FullMethodName,
+				autograder_pb.AutograderService_GetGradeQueue_FullMethodName,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.RequireAdmin},
 		},
 		{
-			Methods: []interface{}{
-				(*AutograderService).GetAssignment,
-				(*AutograderService).GetAssignmentsInCourse,
-				(*AutograderService).GetSubmissionsInAssignment,
-				(*AutograderService).GetLeaderboard,
-				(*AutograderService).HasLeaderboard,
-				(*AutograderService).GetCourse,
+			Methods: []string{
+				autograder_pb.AutograderService_GetAssignment_FullMethodName,
+				autograder_pb.AutograderService_GetAssignmentsInCourse_FullMethodName,
+				autograder_pb.AutograderService_GetSubmissionsInAssignment_FullMethodName,
+				autograder_pb.AutograderService_GetLeaderboard_FullMethodName,
+				autograder_pb.AutograderService_HasLeaderboard_FullMethodName,
+				autograder_pb.AutograderService_GetCourse_FullMethodName,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse},
 		},
 		{
-			Methods: []interface{}{
-				(*AutograderService).CreateSubmission,
-				(*AutograderService).CreateManifest,
+			Methods: []string{
+				autograder_pb.AutograderService_CreateSubmission_FullMethodName,
+				autograder_pb.AutograderService_CreateManifest_FullMethodName,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.NotAfterDueDate},
 		},
 		{
 
-			Methods: []interface{}{
-				(*AutograderService).CreateAssignment,
-				(*AutograderService).GetCourseMembers,
-				(*AutograderService).RemoveCourseMembers,
-				(*AutograderService).AddCourseMembers,
-				(*AutograderService).UpdateCourse,
-				(*AutograderService).UpdateAssignment,
-				(*AutograderService).UpdateCourseMember,
-				(*AutograderService).CanWriteCourse,
-				(*AutograderService).GenerateJoinCode,
-				(*AutograderService).ChangeAllowsJoinCourse,
-				(*AutograderService).InspectAllSubmissionsInAssignment,
-				(*AutograderService).InspectUserSubmissionHistory,
-				(*AutograderService).RegradeSubmission,
-				(*AutograderService).RegradeAssignment,
-				(*AutograderService).ChangeLeaderboardAnonymous,
-				(*AutograderService).ExportAssignmentGrades,
-				(*AutograderService).DeleteLeaderboard,
+			Methods: []string{
+				autograder_pb.AutograderService_CreateAssignment_FullMethodName,
+				autograder_pb.AutograderService_GetCourseMembers_FullMethodName,
+				autograder_pb.AutograderService_RemoveCourseMembers_FullMethodName,
+				autograder_pb.AutograderService_AddCourseMembers_FullMethodName,
+				autograder_pb.AutograderService_UpdateCourse_FullMethodName,
+				autograder_pb.AutograderService_UpdateAssignment_FullMethodName,
+				autograder_pb.AutograderService_UpdateCourseMember_FullMethodName,
+				autograder_pb.AutograderService_CanWriteCourse_FullMethodName,
+				autograder_pb.AutograderService_GenerateJoinCode_FullMethodName,
+				autograder_pb.AutograderService_ChangeAllowsJoinCourse_FullMethodName,
+				autograder_pb.AutograderService_InspectAllSubmissionsInAssignment_FullMethodName,
+				autograder_pb.AutograderService_InspectUserSubmissionHistory_FullMethodName,
+				autograder_pb.AutograderService_RegradeSubmission_FullMethodName,
+				autograder_pb.AutograderService_RegradeAssignment_FullMethodName,
+				autograder_pb.AutograderService_ChangeLeaderboardAnonymous_FullMethodName,
+				autograder_pb.AutograderService_ExportAssignmentGrades_FullMethodName,
+				autograder_pb.AutograderService_DeleteLeaderboard_FullMethodName,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireCourseWrite},
 		},
 		{
-			Methods: []interface{}{
-				(*AutograderService).InitDownload,
-				(*AutograderService).GetFilesInSubmission,
-				(*AutograderService).GetSubmissionReport,
-				(*AutograderService).SubscribeSubmission,
-				(*AutograderService).CancelSubmission,
-				(*AutograderService).StreamLog,
+			Methods: []string{
+				autograder_pb.AutograderService_InitDownload_FullMethodName,
+				autograder_pb.AutograderService_GetFilesInSubmission_FullMethodName,
+				autograder_pb.AutograderService_GetSubmissionReport_FullMethodName,
+				autograder_pb.AutograderService_SubscribeSubmission_FullMethodName,
+				autograder_pb.AutograderService_CancelSubmission_FullMethodName,
+				autograder_pb.AutograderService_StreamLog_FullMethodName,
 			},
 			AuthFuncs: []MethodAuthFunc{a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireSubmissionRead},
 		},
 		{
-			Methods: []interface{}{
-				(*AutograderService).ActivateSubmission,
+			Methods: []string{
+				autograder_pb.AutograderService_ActivateSubmission_FullMethodName,
 			},
 			AuthFuncs: []MethodAuthFunc{
 				a.RequireLogin, a.GetCourseId, a.RequireInCourse, a.RequireSubmissionRead, a.NotAfterDueDate,
@@ -361,7 +354,10 @@ func (a *AutograderService) initAuthFuncs() {
 
 	for _, authMap := range authMaps {
 		for _, method := range authMap.Methods {
-			a.authFuncs[getFullName(getFunctionName(method))] = authMap.AuthFuncs
+			if _, dup := a.authFuncs[method]; dup {
+				panic(fmt.Sprintf("auth chain for %s registered twice", method))
+			}
+			a.authFuncs[method] = authMap.AuthFuncs
 		}
 	}
 }

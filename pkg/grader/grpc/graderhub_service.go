@@ -127,6 +127,11 @@ type GraderHubService struct {
 
 	runningMu   *sync.Mutex
 	runningList map[uint64]*grader_pb.GradeRequest
+
+	// ctx governs the long-lived goroutines (scheduler, heartbeat monitors);
+	// Close cancels it.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func (g *GraderHubService) removePendingGradeRequest(submissionId uint64) {
@@ -316,6 +321,8 @@ func (g *GraderHubService) graderMonitor(graderId uint64, alive chan *time.Time)
 	defer logger.Info("Grader.Monitor.Exit")
 	for {
 		select {
+		case <-g.ctx.Done():
+			return
 		case t := <-alive:
 			if !timer.Stop() {
 				<-timer.C
@@ -569,7 +576,15 @@ func (g *GraderHubService) scheduler() {
 	defer g.queuedMu.Unlock()
 	for {
 		for g.queuedList.Len() == 0 {
+			if g.ctx.Err() != nil {
+				return
+			}
 			g.schedulerCond.Wait()
+		}
+		select {
+		case <-g.ctx.Done():
+			return
+		default:
 		}
 		if !g.schedulePass() {
 			// Nothing could be placed (no grader online, all at capacity, or
@@ -971,8 +986,12 @@ func (g *GraderHubService) CancelGrade(
 
 func NewGraderHubService(
 	db *pebble.DB, srr repository.SubmissionReportRepository, token string, heartbeatInterval time.Duration,
-) *GraderHubService {
-	gr := repository.NewKVGraderRepository(db)
+) (*GraderHubService, error) {
+	gr, err := repository.NewKVGraderRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	svc := &GraderHubService{
 		graderRepo:           gr,
 		submissionReportRepo: srr,
@@ -995,17 +1014,20 @@ func NewGraderHubService(
 		monitorChs:           map[uint64]chan *time.Time{},
 		token:                token,
 		heartbeatTimeout:     heartbeatInterval,
+		ctx:                  ctx,
+		cancel:               cancel,
 	}
 	svc.schedulerCond = sync.NewCond(svc.queuedMu)
-	ids, graders, err := gr.GetAllGraders(context.Background())
+	ids, graders, err := gr.GetAllGraders(ctx)
 	if err != nil {
-		panic(err)
+		cancel()
+		return nil, err
 	}
-	gr.ClearRunning(context.Background())
+	gr.ClearRunning(ctx)
 	for i := 0; i < len(ids); i++ {
 		if graders[i].GetStatus() == model_pb.GraderStatusMetadata_Online {
 			graders[i].Status = model_pb.GraderStatusMetadata_Unknown
-			err := gr.UpdateGrader(context.Background(), ids[i], graders[i])
+			err := gr.UpdateGrader(ctx, ids[i], graders[i])
 			if err != nil {
 				zap.L().Error("GraderHub.Init.UpdateGrader", zap.Error(err))
 			}
@@ -1017,5 +1039,14 @@ func NewGraderHubService(
 		go svc.graderMonitor(id, tCh)
 	}
 	go svc.scheduler()
-	return svc
+	return svc, nil
+}
+
+// Close stops the scheduler and the heartbeat monitors. It does not close the
+// underlying database.
+func (g *GraderHubService) Close() {
+	g.cancel()
+	g.queuedMu.Lock()
+	g.schedulerCond.Broadcast()
+	g.queuedMu.Unlock()
 }

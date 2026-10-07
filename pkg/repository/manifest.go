@@ -68,10 +68,20 @@ func (mr *KVManifestRepository) GetManifest(ctx context.Context, manifestId uint
 	return manifest, nil
 }
 
+// GarbageCollect sweeps expired manifests every 10 seconds until ctx is
+// cancelled, reporting each deleted manifest on the expired channel, which it
+// closes on return. Sends are abandoned if ctx is cancelled, so the sweep can
+// never block on an unread channel.
 func (mr *KVManifestRepository) GarbageCollect(ctx context.Context, expired chan uint64) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
+	defer close(expired)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		prefix := mr.getMetadataPrefix()
 		prefixLen := len(prefix)
 		iter := mr.db.NewIter(PrefixIterOptions(prefix))
@@ -90,10 +100,16 @@ func (mr *KVManifestRepository) GarbageCollect(ctx context.Context, expired chan
 				if err != nil {
 					logger.Error("Manifest.Expired.Delete", zap.Error(err))
 				}
-				expired <- manifestId
+				select {
+				case expired <- manifestId:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
-		_ = iter.Close()
+		if err := iter.Close(); err != nil {
+			zap.L().Error("Manifest.GC.Close", zap.Error(err))
+		}
 	}
 }
 
@@ -299,7 +315,10 @@ func (mr *KVManifestRepository) LockManifest(ctx context.Context, id uint64) (*s
 	return mu, nil
 }
 
-func NewKVManifestRepository(db *pebble.DB) ManifestRepository {
-	seq, _ := NewKVSequencer(db, []byte("manifest:next_id"))
-	return &KVManifestRepository{db: db, seq: seq, locks: &sync.Map{}}
+func NewKVManifestRepository(db *pebble.DB) (ManifestRepository, error) {
+	seq, err := NewKVSequencer(db, []byte("manifest:next_id"))
+	if err != nil {
+		return nil, err
+	}
+	return &KVManifestRepository{db: db, seq: seq, locks: &sync.Map{}}, nil
 }

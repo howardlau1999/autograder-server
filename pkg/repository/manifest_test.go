@@ -41,7 +41,10 @@ func TestCreateManifest(t *testing.T) {
 			t.Errorf("failed to close database: %v", err)
 		}
 	}(db)
-	repo := NewKVManifestRepository(db)
+	repo, err := NewKVManifestRepository(db)
+	if err != nil {
+		t.Fatalf("failed to create repository: %v", err)
+	}
 	id, err := repo.CreateManifest(context.Background(), 1, 1, testUploadLimit)
 	if err != nil {
 		t.Errorf("failed to create manifest: %v", err)
@@ -64,7 +67,10 @@ func TestAddFileToManifest(t *testing.T) {
 		}
 	}(db)
 
-	repo := NewKVManifestRepository(db)
+	repo, err := NewKVManifestRepository(db)
+	if err != nil {
+		t.Fatalf("failed to create repository: %v", err)
+	}
 	id, err := repo.CreateManifest(context.Background(), 1, 1, testUploadLimit)
 	if err != nil {
 		t.Errorf("failed to create manifest: %v", err)

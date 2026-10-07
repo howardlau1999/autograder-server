@@ -465,14 +465,14 @@ WriteReport:
 	}
 }
 
-func NewDockerProgrammingGrader(concurrency int) *DockerProgrammingGrader {
+func NewDockerProgrammingGrader(concurrency int) (*DockerProgrammingGrader, error) {
 	mu := &sync.Mutex{}
 	cond := sync.NewCond(mu)
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return &DockerProgrammingGrader{cli: cli, mu: mu, cond: cond, concurrency: concurrency}
+	return &DockerProgrammingGrader{cli: cli, mu: mu, cond: cond, concurrency: concurrency}, nil
 }
 
 func NewHubGrader(svc *autograder_grpc.GraderHubService) *HubGrader {

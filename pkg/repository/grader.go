@@ -275,10 +275,10 @@ func (gr *KVGraderRepository) DeleteGrader(ctx context.Context, graderId uint64)
 	return gr.db.Delete(gr.getGraderIdKey(graderId), pebble.Sync)
 }
 
-func NewKVGraderRepository(db *pebble.DB) GraderRepository {
+func NewKVGraderRepository(db *pebble.DB) (GraderRepository, error) {
 	seq, err := NewKVSequencer(db, []byte("grader:next_id"))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return &KVGraderRepository{db: db, seq: seq}
+	return &KVGraderRepository{db: db, seq: seq}, nil
 }

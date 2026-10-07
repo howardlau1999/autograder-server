@@ -11,22 +11,21 @@ For documentation, please head for [https://autograder-docs.howardlau.me](https:
 
 ## Build
 
-Go 1.17+ is needed for building the server.
+Go 1.24+ is needed for building the server.
 
 To build without client-side webpage code (which means you need a reverse-proxy like nginx to serve the static contents)
 
 ```bash
-mkdir -p pkg/web/dist
-go build -tags containers_image_openpgp -o autograder-server cmd/autograder_server.go
+go build -tags containers_image_openpgp -o autograder-server ./cmd/autograder-server
 ```
 
 To build the grader service
 
 ```bash
-go build -tags containers_image_openpgp -o autograder-grader cmd/autograder_grader.go
+go build -tags containers_image_openpgp -o autograder-grader ./cmd/autograder-grader
 ```
 
-To build with the client-side webpage code, Node.js 16+ is needed.
+To build with the client-side webpage code, Node.js 18+ is needed.
 
 ```bash
 git submodule update --init 
@@ -34,5 +33,21 @@ npm install -g @angular/cli
 cd web
 npm install && npm install --no-save --ignore-scripts vcd-stream && ng build --output-path ../pkg/web/dist
 cd ..
-go build -tags containers_image_openpgp -o autograder-server cmd/autograder_server.go
+go build -tags containers_image_openpgp -o autograder-server ./cmd/autograder-server
 ```
+
+## Development checks
+
+```bash
+gofmt -l cmd pkg            # must print nothing
+go vet -tags containers_image_openpgp ./...
+go test -race -tags containers_image_openpgp ./...
+```
+
+## Configuration
+
+Both binaries read `config.toml` from `/etc/autograder-server/`, `$HOME/.autograder-server/` or the
+working directory; `autograder-server --config` prints a template. Any key can be overridden by an
+environment variable named after it with `.` and `-` replaced by `_` (e.g. `HUB_TOKEN`,
+`TOKEN_SECRET_SESSION`). The server refuses to start while any of `token.secret.*`, `hub.token`
+or `fs.http.token` is empty or still set to the placeholder from the template.
