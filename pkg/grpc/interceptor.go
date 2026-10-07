@@ -96,7 +96,11 @@ func (a *AutograderService) RequireLogin(ctx context.Context, req interface{}) (
 	ss, err := a.signPayloadToken(a.userJWTSignKey, payloadPB, time.Now().Add(UserTokenValidDuration))
 	if err == nil {
 		refreshMD := metadata.Pairs("token", ss)
-		_ = grpc.SetHeader(ctx, refreshMD)
+		if err := grpc.SetHeader(ctx, refreshMD); err != nil {
+			// The token is still valid for this call; only the sliding
+			// renewal was lost, so log it rather than failing the request.
+			ctxzap.Extract(ctx).Error("RequireLogin.SetRefreshHeader", zap.Error(err))
+		}
 	}
 	return context.WithValue(ctx, userInfoCtxKey{}, payloadPB), nil
 }
