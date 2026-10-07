@@ -19,13 +19,35 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "gofmt needed on:"; echo "$unformatted"; exit 1
           fi
-      - run: mkdir -p pkg/web/dist && touch pkg/web/dist/.keep
       - run: go vet -tags containers_image_openpgp ./...
       - run: go test -race -tags containers_image_openpgp ./...
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck -tags containers_image_openpgp ./...
+
+  check-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - run: cd web && npm install
+      - run: cd web && npx ng lint
+      # Advisory only until Angular is upgraded (the known advisories in
+      # Angular 13's dependency tree need a major-version bump).
+      - name: npm audit (advisory, production dependencies)
+        continue-on-error: true
+        run: cd web && npm audit --omit=dev
 
   build-web:
     runs-on: ubuntu-latest
