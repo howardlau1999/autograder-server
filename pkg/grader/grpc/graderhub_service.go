@@ -14,7 +14,7 @@ import (
 	grader_pb "autograder-server/pkg/grader/proto"
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/repository"
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"

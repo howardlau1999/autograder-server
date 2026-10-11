@@ -31,26 +31,26 @@ import (
 	"autograder-server/pkg/storage"
 	"autograder-server/pkg/web"
 
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httprate"
-	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
-	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
-	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
-	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
-	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
-	"github.com/improbable-eng/grpc-web/go/grpcweb"
+	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
+	grpclogging "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
+	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/recovery"
 	"github.com/kataras/hcaptcha"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapgrpc"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/grpclog"
 	"google.golang.org/grpc/keepalive"
 )
 
@@ -317,7 +317,7 @@ func processCommandLineOptions() bool {
 	}
 
 	if isInit {
-		db, err := pebble.Open(viper.GetString("db.local.path"), &pebble.Options{Merger: repository.NewKVMerger()})
+		db, err := repository.OpenDB(viper.GetString("db.local.path"))
 		if err != nil {
 			log.Fatalf("Failed to open database: %v", err)
 		}
@@ -344,7 +344,7 @@ func main() {
 	)
 	defer zapLogger.Sync()
 	validateSecrets()
-	db, err := pebble.Open(viper.GetString("db.local.path"), &pebble.Options{Merger: repository.NewKVMerger()})
+	db, err := repository.OpenDB(viper.GetString("db.local.path"))
 	if err != nil {
 		zap.L().Fatal("DB.Open", zap.Error(err))
 	}
@@ -408,23 +408,26 @@ func main() {
 			MaxAge:           int(10 * time.Minute / time.Second),
 		},
 	)
-	grpc_zap.ReplaceGrpcLoggerV2(zapLogger)
+	grpclog.SetLoggerV2(zapgrpc.NewLogger(zapLogger.Named("grpc")))
+	srvMetrics := grpcprom.NewServerMetrics(grpcprom.WithServerHandlingTimeHistogram())
+	prometheus.MustRegister(srvMetrics)
+	grpcLogger := logging.GrpcLogger(zapLogger)
+	// One line per finished call; the per-call logger handlers obtain through
+	// logging.Extract carries the same fields. Recovery is innermost so a
+	// panic is reported as an Internal error by the outer interceptors.
+	logOpts := []grpclogging.Option{grpclogging.WithLogOnEvents(grpclogging.FinishCall)}
 	autograderServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
-			grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
-			grpc_opentracing.UnaryServerInterceptor(),
-			grpc_prometheus.UnaryServerInterceptor,
-			grpc_zap.UnaryServerInterceptor(zapLogger),
+			srvMetrics.UnaryServerInterceptor(),
+			grpclogging.UnaryServerInterceptor(grpcLogger, logOpts...),
 			autograder_grpc.UnaryAuth(),
-			grpc_recovery.UnaryServerInterceptor(),
+			recovery.UnaryServerInterceptor(),
 		),
 		grpc.ChainStreamInterceptor(
-			grpc_ctxtags.StreamServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
-			grpc_opentracing.StreamServerInterceptor(),
-			grpc_prometheus.StreamServerInterceptor,
-			grpc_zap.StreamServerInterceptor(zapLogger),
+			srvMetrics.StreamServerInterceptor(),
+			grpclogging.StreamServerInterceptor(grpcLogger, logOpts...),
 			autograder_grpc.StreamAuth(),
-			grpc_recovery.StreamServerInterceptor(),
+			recovery.StreamServerInterceptor(),
 		),
 	)
 	kaep := keepalive.EnforcementPolicy{PermitWithoutStream: true, MinTime: 1 * time.Second}
@@ -441,20 +444,16 @@ func main() {
 		grpc.KeepaliveEnforcementPolicy(kaep),
 		grpc.KeepaliveParams(ksap),
 		grpc.ChainUnaryInterceptor(
-			grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
-			grpc_opentracing.UnaryServerInterceptor(),
-			grpc_prometheus.UnaryServerInterceptor,
-			grpc_zap.UnaryServerInterceptor(zapLogger),
+			srvMetrics.UnaryServerInterceptor(),
+			grpclogging.UnaryServerInterceptor(grpcLogger, logOpts...),
 			graderHubService.UnaryAuthInterceptor(),
-			grpc_recovery.UnaryServerInterceptor(),
+			recovery.UnaryServerInterceptor(),
 		),
 		grpc.ChainStreamInterceptor(
-			grpc_ctxtags.StreamServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
-			grpc_opentracing.StreamServerInterceptor(),
-			grpc_prometheus.StreamServerInterceptor,
-			grpc_zap.StreamServerInterceptor(zapLogger),
+			srvMetrics.StreamServerInterceptor(),
+			grpclogging.StreamServerInterceptor(grpcLogger, logOpts...),
 			graderHubService.StreamAuthInterceptor(),
-			grpc_recovery.StreamServerInterceptor(),
+			recovery.StreamServerInterceptor(),
 		),
 	)
 	autograderService, err := autograder_grpc.NewAutograderServiceServer(
@@ -466,10 +465,10 @@ func main() {
 	defer autograderService.Close()
 	autograder_pb.RegisterAutograderServiceServer(autograderServer, autograderService)
 	grader_pb.RegisterGraderHubServiceServer(graderHubServer, graderHubService)
-	wrappedGrpc := grpcweb.WrapServer(
-		autograderServer, grpcweb.WithOriginFunc(origins.allowCrossOrigin),
-		grpcweb.WithWebsockets(true), grpcweb.WithWebsocketOriginFunc(origins.allowWebsocket),
-	)
+	// Pre-populates the per-method counters so they are exported as 0.
+	srvMetrics.InitializeMetrics(autograderServer)
+	srvMetrics.InitializeMetrics(graderHubServer)
+	grpcWeb := middleware.NewGrpcWeb(autograderServer, origins.allowCrossOrigin)
 	// Resolve the client IP before rate limiting. By default the socket
 	// address is used and X-Forwarded-For is ignored, so a client cannot
 	// spoof its way around the limiter; behind a reverse proxy set
@@ -494,7 +493,7 @@ func main() {
 		apiOnly(httprate.LimitBy(rateLimitRequests, rateLimitWindow, clientIPKey)),
 		chiMiddleware.Logger,
 		chiMiddleware.Recoverer,
-		middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler,
+		grpcWeb.Handler,
 	)
 	router.Options(
 		apiPathPrefix+"FileUpload",

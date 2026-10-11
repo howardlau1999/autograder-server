@@ -8,7 +8,7 @@ import (
 	"strconv"
 
 	grader_pb "autograder-server/pkg/grader/proto"
-	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	"github.com/grpc-ecosystem/go-grpc-middleware/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -132,7 +132,7 @@ func (g *GraderHubService) StreamAuthInterceptor() grpc.StreamServerInterceptor 
 		if err != nil {
 			return err
 		}
-		wrapped := grpc_middleware.WrapServerStream(ss)
+		wrapped := middleware.WrapServerStream(ss)
 		wrapped.WrappedContext = ctx
 		return handler(srv, wrapped)
 	}

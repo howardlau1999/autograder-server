@@ -2,7 +2,7 @@ package repository
 
 import (
 	"encoding/binary"
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 )
 
 func KeyUpperBound(b []byte) []byte {

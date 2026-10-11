@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	model_pb "autograder-server/pkg/model/proto"
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )

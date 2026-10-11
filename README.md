@@ -50,13 +50,21 @@ go test -race -tags containers_image_openpgp ./...
 
 ### Dependency notes
 
-- `github.com/cockroachdb/pebble` is kept on v1.1.x on purpose. Pebble v2 can only open stores
-  whose format major version is at least `FormatFlushableIngest`, so an existing data directory
-  has to be ratcheted first: run a v1.1 build with `db.RatchetFormatMajorVersion(pebble.FormatNewest)`
-  once (back up `data/` beforehand), then switch the import to `github.com/cockroachdb/pebble/v2`.
-- `github.com/grpc-ecosystem/go-grpc-middleware` stays on v1 (v2 is a different API) and
-  `github.com/improbable-eng/grpc-web` / `go-grpc-prometheus` are archived upstream but have no
-  known advisories; replacing them is a separate piece of work.
+- The key-value store is `github.com/cockroachdb/pebble/v2`. Pebble v2 cannot open stores
+  written by the previous releases (pebble v1 at its default format), so `repository.OpenDB`
+  upgrades such a store in place on first start: it is ratcheted with pebble v1.1 (kept as a
+  dependency for exactly this) to v1's newest format, which v2 accepts and which the previous
+  release can still read, so a rollback to that release stays possible. The upgrade is logged as
+  `DB.FormatUpgrade`; back up the data directory before deploying a new release anyway. Once no
+  deployment runs the old format any more, the `pebble` v1 dependency can be dropped.
+- gRPC-Web is served by `pkg/middleware.GrpcWeb`, a small in-process bridge in front of the
+  grpc-go server (the archived `improbable-eng/grpc-web` is gone). It supports unary and
+  server-streaming calls, binary and base64 ("grpc-web-text") framing and CORS; the web client
+  reads streams from the fetch response body, there is no WebSocket transport any more.
+- Interceptors come from `github.com/grpc-ecosystem/go-grpc-middleware/v2` (logging, recovery,
+  auth) and its `providers/prometheus` module, which exports the same `grpc_server_*` /
+  `grpc_client_*` metric names as the retired `go-grpc-prometheus`. Request-scoped loggers are
+  obtained with `logging.Extract(ctx)` from `pkg/logging`.
 - Docker is accessed through the split-out `github.com/moby/moby/client` SDK, not
   `github.com/docker/docker`, so govulncheck no longer reports the daemon-only advisories of the
   monolithic module.
@@ -78,11 +86,11 @@ Keys that need attention when deploying:
   real hop count there.
 - `cors.allowed-origins` — origins allowed to make cross-origin requests in production (in
   `server.development=true` every origin is reflected). Leave it empty when the web client is
-  served by this server: same-origin requests, including the WebSocket handshakes used for
-  server-streaming RPCs, are always accepted. Only list an origin when the client is served from a
-  different host or port, e.g. `["http://localhost:4200"]` for `ng serve`. A reverse proxy must
-  pass the original `Host` header through (`proxy_set_header Host $host;` in nginx), otherwise
-  same-origin WebSocket handshakes cannot be recognised and the origin has to be listed explicitly.
+  served by this server: same-origin requests are always accepted. Only list an origin when the
+  client is served from a different host or port, e.g. `["http://localhost:4200"]` for
+  `ng serve`. Server-streaming RPCs are plain HTTP responses that are flushed message by message
+  (the server sets `X-Accel-Buffering: no`, which nginx honours); a proxy that buffers responses
+  regardless would delay them.
 - `smtp.tls-mode` — `implicit` (TLS from the start, port 465, the default), `starttls` (port 587)
   or `none` (plain, for localhost relays only).
 - `hcaptcha.site-key` / `hcaptcha.secret` — both are required for the sign-up and

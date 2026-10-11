@@ -1,6 +1,6 @@
 package repository
 
-import "github.com/cockroachdb/pebble"
+import "github.com/cockroachdb/pebble/v2"
 
 type ExportRepository interface {
 }

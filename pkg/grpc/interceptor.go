@@ -6,10 +6,10 @@ import (
 	"time"
 
 	autograder_pb "autograder-server/pkg/api/proto"
+	"autograder-server/pkg/logging"
 	model_pb "autograder-server/pkg/model/proto"
-	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
-	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/auth"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"github.com/grpc-ecosystem/go-grpc-middleware/v2"
+	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -61,7 +61,7 @@ func (a *AutograderService) NoopAuth(ctx context.Context, req interface{}) (cont
 }
 
 func (a *AutograderService) RequireCaptcha(ctx context.Context, req interface{}) (context.Context, error) {
-	l := ctxzap.Extract(ctx)
+	l := logging.Extract(ctx)
 	r, ok := req.(IGetCaptcha)
 	if !ok {
 		l.Error("RequireCaptcha.NoGetCaptcha")
@@ -80,7 +80,7 @@ func (a *AutograderService) RequireCaptcha(ctx context.Context, req interface{})
 }
 
 func (a *AutograderService) RequireLogin(ctx context.Context, req interface{}) (context.Context, error) {
-	token, err := grpc_auth.AuthFromMD(ctx, "bearer")
+	token, err := auth.AuthFromMD(ctx, "bearer")
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,7 @@ func (a *AutograderService) RequireLogin(ctx context.Context, req interface{}) (
 		if err := grpc.SetHeader(ctx, refreshMD); err != nil {
 			// The token is still valid for this call; only the sliding
 			// renewal was lost, so log it rather than failing the request.
-			ctxzap.Extract(ctx).Error("RequireLogin.SetRefreshHeader", zap.Error(err))
+			logging.Extract(ctx).Error("RequireLogin.SetRefreshHeader", zap.Error(err))
 		}
 	}
 	return context.WithValue(ctx, userInfoCtxKey{}, payloadPB), nil
@@ -401,7 +401,7 @@ func StreamAuth() grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		ctx := ss.Context()
 
-		wrapped := grpc_middleware.WrapServerStream(ss)
+		wrapped := middleware.WrapServerStream(ss)
 		wrapped.WrappedContext = ctx
 		return handler(srv, wrapped)
 	}

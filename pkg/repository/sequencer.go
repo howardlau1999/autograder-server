@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"sync"
 
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 )
 
 const BatchSize = 10

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	model_pb "autograder-server/pkg/model/proto"
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"

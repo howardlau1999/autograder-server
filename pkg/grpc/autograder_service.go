@@ -23,6 +23,7 @@ import (
 	autograder_pb "autograder-server/pkg/api/proto"
 	"autograder-server/pkg/grader"
 	grader_grpc "autograder-server/pkg/grader/grpc"
+	"autograder-server/pkg/logging"
 	"autograder-server/pkg/mailer"
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/repository"
@@ -30,11 +31,10 @@ import (
 	"autograder-server/pkg/utils"
 
 	"github.com/avast/retry-go/v4"
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/go-github/v86/github"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/kataras/hcaptcha"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -129,7 +129,7 @@ func (a *AutograderService) CanWriteCourse(
 func (a *AutograderService) ResetPassword(
 	ctx context.Context, request *autograder_pb.ResetPasswordRequest,
 ) (*autograder_pb.ResetPasswordResponse, error) {
-	l := ctxzap.Extract(ctx)
+	l := logging.Extract(ctx)
 	email := request.GetEmail()
 	code := request.GetCode()
 	l.Debug("ResetPassword", zap.String("email", email), zap.String("code", code))
@@ -172,7 +172,7 @@ func (a *AutograderService) requestEmailCode(ctx context.Context, subject, email
 	if !isMailValid(email) {
 		return
 	}
-	l := ctxzap.Extract(ctx).With(zap.String("email", email))
+	l := logging.Extract(ctx).With(zap.String("email", email))
 	codeInt := rand.Intn(ResetCodeMax)
 	codeInt += 100000
 	code := fmt.Sprintf("%d", codeInt)
@@ -219,7 +219,7 @@ func (a *AutograderService) validateUsernameAndEmail(ctx context.Context, userna
 func (a *AutograderService) signUpNewUser(ctx context.Context, email, username string, password string) (
 	uint64, error,
 ) {
-	l := ctxzap.Extract(ctx)
+	l := logging.Extract(ctx)
 	if err := a.validateUsernameAndEmail(ctx, username, email); err != nil {
 		return 0, err
 	}
@@ -275,7 +275,7 @@ func (a *AutograderService) RequestSignUpToken(
 func (a *AutograderService) RequestPasswordReset(
 	ctx context.Context, request *autograder_pb.RequestPasswordResetRequest,
 ) (*autograder_pb.RequestPasswordResetResponse, error) {
-	l := ctxzap.Extract(ctx)
+	l := logging.Extract(ctx)
 	email := request.GetEmail()
 	userId, _ := a.userRepo.GetUserIdByEmail(ctx, email)
 	if userId == 0 {
@@ -291,7 +291,7 @@ func (a *AutograderService) UpdateCourseMember(
 ) (*autograder_pb.UpdateCourseMemberResponse, error) {
 	courseId := request.GetCourseId()
 	member := request.GetMember()
-	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId), zap.Uint64("userId", member.GetUserId()))
+	l := logging.Extract(ctx).With(zap.Uint64("courseId", courseId), zap.Uint64("userId", member.GetUserId()))
 	l.Debug("UpdateCourseMember")
 	dbMember := a.userRepo.GetCourseMember(ctx, member.GetUserId(), courseId)
 	if dbMember == nil {
@@ -316,7 +316,7 @@ func (a *AutograderService) UpdateCourse(
 ) (*autograder_pb.UpdateCourseResponse, error) {
 	courseId := request.GetCourseId()
 
-	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId))
+	l := logging.Extract(ctx).With(zap.Uint64("courseId", courseId))
 	l.Debug("UpdateCourse")
 	course, err := a.courseRepo.GetCourse(ctx, courseId)
 	if err != nil {
@@ -338,7 +338,7 @@ func (a *AutograderService) UpdateAssignment(
 ) (*autograder_pb.UpdateAssignmentResponse, error) {
 	assignmentId := request.GetAssignmentId()
 	assignment := request.GetAssignment()
-	l := ctxzap.Extract(ctx).With(zap.Uint64("assignmentId", assignmentId))
+	l := logging.Extract(ctx).With(zap.Uint64("assignmentId", assignmentId))
 	l.Debug("UpdateAssignment")
 	_, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
 	if err != nil {
@@ -358,7 +358,7 @@ func (a *AutograderService) AddCourseMembers(
 ) (*autograder_pb.AddCourseMembersResponse, error) {
 	courseId := request.GetCourseId()
 	membersToAdd := request.GetMembers()
-	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId))
+	l := logging.Extract(ctx).With(zap.Uint64("courseId", courseId))
 	var added []*model_pb.CourseMember
 	for _, memberToAdd := range membersToAdd {
 		var err error
@@ -420,7 +420,7 @@ func (a *AutograderService) RemoveCourseMembers(
 	membersToRemove := request.GetUserIds()
 	courseId := request.GetCourseId()
 	var removed []uint64
-	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId))
+	l := logging.Extract(ctx).With(zap.Uint64("courseId", courseId))
 	for _, memberToRemove := range membersToRemove {
 		if currentUserId == memberToRemove {
 			continue
@@ -443,7 +443,7 @@ func (a *AutograderService) RemoveCourseMembers(
 func (a *AutograderService) GetCourseMembers(
 	ctx context.Context, request *autograder_pb.GetCourseMembersRequest,
 ) (*autograder_pb.GetCourseMembersResponse, error) {
-	l := ctxzap.Extract(ctx)
+	l := logging.Extract(ctx)
 	courseId := request.GetCourseId()
 	members, err := a.courseRepo.GetUsersByCourse(ctx, request.GetCourseId())
 	if err != nil {
@@ -604,7 +604,7 @@ func (a *AutograderService) CreateAssignment(
 func (a *AutograderService) CreateCourse(
 	ctx context.Context, request *autograder_pb.CreateCourseRequest,
 ) (*autograder_pb.CreateCourseResponse, error) {
-	l := ctxzap.Extract(ctx)
+	l := logging.Extract(ctx)
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	resp := &autograder_pb.CreateCourseResponse{}
 	if len(request.GetName()) == 0 {
@@ -980,7 +980,7 @@ func (a *AutograderService) CreateSubmission(
 	// From here on the submission exists and will be graded. The remaining
 	// steps are cleanup; failing them must not report an error to the client,
 	// which would suggest the submission was not accepted.
-	l := ctxzap.Extract(ctx).With(zap.Uint64("submissionId", id), zap.Uint64("manifestId", manifestId))
+	l := logging.Extract(ctx).With(zap.Uint64("submissionId", id), zap.Uint64("manifestId", manifestId))
 	if err = a.manifestRepo.DeleteManifest(ctx, manifestId); err != nil {
 		l.Error("CreateSubmission.DeleteManifest", zap.Error(err))
 	}
@@ -1076,7 +1076,7 @@ func (a *AutograderService) SubscribeSubmission(
 		return err
 	}
 	id := request.GetSubmissionId()
-	l := ctxzap.Extract(ctx).With(zap.Uint64("submissionId", id))
+	l := logging.Extract(ctx).With(zap.Uint64("submissionId", id))
 	// Subscribe before reading the brief so a status change between the read
 	// and the subscription is still delivered.
 	mailbox := a.graderHubSvc.Subscribe(id)
@@ -1294,7 +1294,7 @@ func (a *AutograderService) signLoginToken(
 func (a *AutograderService) Login(
 	ctx context.Context, request *autograder_pb.LoginRequest,
 ) (*autograder_pb.LoginResponse, error) {
-	l := ctxzap.Extract(ctx)
+	l := logging.Extract(ctx)
 	username := request.GetUsername()
 	password := request.GetPassword()
 	l.Debug("login", zap.String("username", username))
@@ -1623,7 +1623,7 @@ func (a *AutograderService) getGithubUser(ctx context.Context, code string) (*gi
 func (a *AutograderService) GithubLogin(
 	ctx context.Context, request *autograder_pb.GithubLoginRequest,
 ) (*autograder_pb.GithubLoginResponse, error) {
-	l := ctxzap.Extract(ctx)
+	l := logging.Extract(ctx)
 	ghUser, token, err := a.getGithubUser(ctx, request.Code)
 	if err != nil {
 		return nil, err
@@ -1700,7 +1700,7 @@ func (a *AutograderService) GithubLogin(
 func (a *AutograderService) GetUser(
 	ctx context.Context, request *autograder_pb.GetUserRequest,
 ) (*autograder_pb.GetUserResponse, error) {
-	l := ctxzap.Extract(ctx)
+	l := logging.Extract(ctx)
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	l.Debug("GetUser", zap.String("username", user.GetUsername()))
 	dbUser, err := a.userRepo.GetUserById(ctx, user.GetUserId())
@@ -1785,7 +1785,7 @@ func (a *AutograderService) UpdatePassword(
 		return &autograder_pb.UpdatePasswordResponse{Success: false}, nil
 	}
 	if err != nil {
-		l := ctxzap.Extract(ctx)
+		l := logging.Extract(ctx)
 		l.Error("UpdatePassword.UpdateUser", zap.Error(err))
 		return nil, status.Error(codes.Internal, "INTERNAL_ERROR")
 	}
@@ -1834,7 +1834,7 @@ func (a *AutograderService) JoinCourse(
 func (a *AutograderService) GenerateJoinCode(
 	ctx context.Context, request *autograder_pb.GenerateJoinCodeRequest,
 ) (*autograder_pb.GenerateJoinCodeResponse, error) {
-	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", request.GetCourseId()))
+	l := logging.Extract(ctx).With(zap.Uint64("courseId", request.GetCourseId()))
 	code := utils.Base30Encode(request.GetCourseId())
 	course, err := a.courseRepo.GetCourse(ctx, request.GetCourseId())
 	if err != nil {
@@ -1861,7 +1861,7 @@ func (a *AutograderService) GenerateJoinCode(
 func (a *AutograderService) ChangeAllowsJoinCourse(
 	ctx context.Context, request *autograder_pb.ChangeAllowsJoinCourseRequest,
 ) (*autograder_pb.ChangeAllowsJoinCourseResponse, error) {
-	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", request.GetCourseId()))
+	l := logging.Extract(ctx).With(zap.Uint64("courseId", request.GetCourseId()))
 	course, err := a.courseRepo.GetCourse(ctx, request.GetCourseId())
 	if err != nil {
 		l.Error("GenerateJoinCode.GetCourse", zap.Error(err))
@@ -1882,7 +1882,7 @@ func (a *AutograderService) InspectAllSubmissionsInAssignment(
 	assignmentId := request.GetAssignmentId()
 	courseId := ctx.Value(courseIdCtxKey{}).(uint64)
 	members, err := a.courseRepo.GetUsersByCourse(ctx, courseId)
-	l := ctxzap.Extract(ctx).With(zap.Uint64("courseId", courseId), zap.Uint64("assignmentId", assignmentId))
+	l := logging.Extract(ctx).With(zap.Uint64("courseId", courseId), zap.Uint64("assignmentId", assignmentId))
 	if err != nil {
 		l.Error("InspectAllSubmissionsInAssignment.GetUsers", zap.Error(err))
 		return nil, status.Error(codes.Internal, "GET_USERS")
@@ -1943,7 +1943,7 @@ func (a *AutograderService) RegradeSubmission(
 func (a *AutograderService) RegradeAssignment(
 	ctx context.Context, request *autograder_pb.RegradeAssignmentRequest,
 ) (*autograder_pb.RegradeAssignmentResponse, error) {
-	l := ctxzap.Extract(ctx)
+	l := logging.Extract(ctx)
 	courseId := ctx.Value(courseIdCtxKey{}).(uint64)
 	members, err := a.courseRepo.GetUsersByCourse(ctx, courseId)
 	if err != nil {
@@ -2023,7 +2023,7 @@ func (a *AutograderService) GetAllGraders(
 func (a *AutograderService) CancelSubmission(
 	ctx context.Context, request *autograder_pb.CancelSubmissionRequest,
 ) (*autograder_pb.CancelSubmissionResponse, error) {
-	l := ctxzap.Extract(ctx).With(zap.Uint64("submissionId", request.GetSubmissionId()))
+	l := logging.Extract(ctx).With(zap.Uint64("submissionId", request.GetSubmissionId()))
 	l.Debug("CancelSubmission")
 	err := a.graderHubSvc.CancelGrade(ctx, request.GetSubmissionId())
 	if err != nil {

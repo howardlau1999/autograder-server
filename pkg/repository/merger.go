@@ -2,7 +2,7 @@ package repository
 
 import (
 	model_pb "autograder-server/pkg/model/proto"
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 	"google.golang.org/protobuf/proto"
 	"io"
 )
@@ -67,7 +67,7 @@ func NewKVMerge(key, value []byte) (pebble.ValueMerger, error) {
 
 func NewKVMerger() *pebble.Merger {
 	return &pebble.Merger{
-		Name:  "autograder-kv-merger",
+		Name:  kvMergerName,
 		Merge: NewKVMerge,
 	}
 }

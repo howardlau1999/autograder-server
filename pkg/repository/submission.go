@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 	"google.golang.org/protobuf/proto"
 )
 

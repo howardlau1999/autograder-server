@@ -21,9 +21,9 @@ import (
 	model_pb "autograder-server/pkg/model/proto"
 	"autograder-server/pkg/storage"
 	"github.com/avast/retry-go/v4"
-	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
-	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
+	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -761,22 +761,25 @@ func (g *GraderWorker) authOutgoing(ctx context.Context) context.Context {
 	)
 }
 
+// hubClientMetrics collects the grpc_client_* metrics for every connection to
+// the hub; the collector must be registered exactly once.
+var hubClientMetrics = sync.OnceValue(func() *grpcprom.ClientMetrics {
+	m := grpcprom.NewClientMetrics()
+	prometheus.MustRegister(m)
+	return m
+})
+
 func (g *GraderWorker) getNewClient() (*grpc.ClientConn, grader_pb.GraderHubServiceClient) {
 	keep := keepalive.ClientParameters{PermitWithoutStream: true, Time: 5 * time.Second, Timeout: 1 * time.Hour}
+	metrics := hubClientMetrics()
 	// NewClient does not dial eagerly; a hub that is down surfaces as an
 	// Unavailable error on the first RPC, which every caller retries.
 	conn, err := grpc.NewClient(
 		g.hubAddress,
 		grpc.WithKeepaliveParams(keep),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithChainUnaryInterceptor(
-			grpc_opentracing.UnaryClientInterceptor(),
-			grpc_prometheus.UnaryClientInterceptor,
-		),
-		grpc.WithChainStreamInterceptor(
-			grpc_opentracing.StreamClientInterceptor(),
-			grpc_prometheus.StreamClientInterceptor,
-		),
+		grpc.WithChainUnaryInterceptor(metrics.UnaryClientInterceptor()),
+		grpc.WithChainStreamInterceptor(metrics.StreamClientInterceptor()),
 	)
 	if err != nil {
 		zap.L().Error("Hub.Dial", zap.Error(err))
