@@ -383,7 +383,13 @@ func main() {
 			smtpTLSMode,
 		)
 	}
-	hcaptchaClient := hcaptcha.New(viper.GetString("hcaptcha.secret-key"))
+	// The template documents hcaptcha.secret; hcaptcha.secret-key is the name
+	// the code read before and is kept so existing deployments do not break.
+	hcaptchaSecret := viper.GetString("hcaptcha.secret")
+	if hcaptchaSecret == "" {
+		hcaptchaSecret = viper.GetString("hcaptcha.secret-key")
+	}
+	hcaptchaClient := hcaptcha.New(hcaptchaSecret)
 	hcaptchaClient.HTTPClient.Timeout = 30 * time.Second
 	githubOauth2Config := &oauth2.Config{
 		ClientID:     viper.GetString("github.client-id"),
@@ -392,22 +398,11 @@ func main() {
 		Endpoint:     github.Endpoint,
 	}
 
-	allowedOrigins := viper.GetStringSlice("cors.allowed-origins")
-	corsDevMode := viper.GetBool("server.development")
-	allowOrigin := func(origin string) bool {
-		for _, o := range allowedOrigins {
-			if o == origin {
-				return true
-			}
-		}
-		// In development reflect any origin for convenience; in production a
-		// cross-origin request must match the configured whitelist.
-		return corsDevMode
-	}
+	origins := newOriginPolicy(viper.GetStringSlice("cors.allowed-origins"), viper.GetBool("server.development"))
 
 	corsHandler := cors.New(
 		cors.Options{
-			AllowOriginFunc:  allowOrigin,
+			AllowOriginFunc:  origins.allowCrossOrigin,
 			AllowedHeaders:   []string{"Upload-token", "Download-token"},
 			ExposedHeaders:   nil,  // make sure that this is *nil*, otherwise the WebResponse overwrite will not work.
 			AllowCredentials: true, // always allow credentials, otherwise :authorization headers won't work
@@ -473,12 +468,8 @@ func main() {
 	autograder_pb.RegisterAutograderServiceServer(autograderServer, autograderService)
 	grader_pb.RegisterGraderHubServiceServer(graderHubServer, graderHubService)
 	wrappedGrpc := grpcweb.WrapServer(
-		autograderServer, grpcweb.WithOriginFunc(allowOrigin),
-		grpcweb.WithWebsockets(true), grpcweb.WithWebsocketOriginFunc(
-			func(r *http.Request) bool {
-				return allowOrigin(r.Header.Get("Origin"))
-			},
-		),
+		autograderServer, grpcweb.WithOriginFunc(origins.allowCrossOrigin),
+		grpcweb.WithWebsockets(true), grpcweb.WithWebsocketOriginFunc(origins.allowWebsocket),
 	)
 	// Resolve the client IP before rate limiting. By default the socket
 	// address is used and X-Forwarded-For is ignored, so a client cannot
