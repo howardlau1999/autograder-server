@@ -883,10 +883,16 @@ func (g *GraderHubService) StreamLogCallback(server grader_pb.GraderHubService_S
 		if err != nil {
 			break
 		}
+		// The web client may disconnect while we are blocked handing it a
+		// chunk; without the ctx case this send would never return once its
+		// reader is gone and the grader's stream would be stuck forever.
+		select {
+		case logStream <- r.Data:
+		case <-client.ctx.Done():
+		}
 		if client.ctx.Err() != nil {
 			break
 		}
-		logStream <- r.Data
 	}
 	g.logStreamMu.Lock()
 	delete(g.logStreams[graderId], requestId)
