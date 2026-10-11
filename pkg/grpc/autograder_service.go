@@ -1677,21 +1677,11 @@ func (a *AutograderService) GithubLogin(
 		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
 	}
 
-	user, userId, _ = a.userRepo.GetUserByUsername(ctx, login)
-	if user != nil {
-		oldGithubId := user.GetGithubId()
-		if oldGithubId != "" && oldGithubId != login {
-			return nil, status.Error(codes.AlreadyExists, "USERNAME_DIFFERENT")
-		}
-		if err := a.userRepo.BindGithubId(ctx, userId, login); err != nil {
-			return nil, status.Error(codes.Internal, "BIND_GITHUB_ID")
-		}
-		if err := a.signLoginToken(ctx, userId, user.Username, user.Nickname, user.IsAdmin); err != nil {
-			return nil, err
-		}
-		return &autograder_pb.GithubLoginResponse{UserId: userId}, nil
-	}
-
+	// Deliberately no match on username == GitHub login: anyone can register a
+	// GitHub account under a free login name, so binding (and logging in to)
+	// a local account on that basis would let them take it over. A user whose
+	// GitHub login collides with an existing local username gets AlreadyExists
+	// from signUpNewUser below and has to bind GitHub from their account page.
 	userId, err = a.signUpNewUser(ctx, email, login, "")
 	if err != nil {
 		return nil, err
