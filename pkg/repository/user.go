@@ -47,7 +47,10 @@ func (ur *KVUserRepository) GetAllUsers(ctx context.Context) ([]uint64, []*model
 	prefixLen := len(prefix)
 	var ids []uint64
 	var users []*model_pb.User
-	iter := ur.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := ur.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return nil, nil, err
+	}
 	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
 		idStr := iter.Key()[prefixLen:]
@@ -96,7 +99,10 @@ func (ur *KVUserRepository) GetCourseMember(
 func (ur *KVUserRepository) GetCoursesByUser(ctx context.Context, userId uint64) ([]*model_pb.CourseMember, error) {
 	var courses []*model_pb.CourseMember
 	prefix := ur.getCoursePrefix(userId)
-	iter := ur.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := ur.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return nil, err
+	}
 	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
 		course := &model_pb.CourseMember{}

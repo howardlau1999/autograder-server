@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"archive/zip"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -27,12 +29,11 @@ import (
 	"autograder-server/pkg/storage"
 	"autograder-server/pkg/utils"
 
-	"github.com/avast/retry-go"
+	"github.com/avast/retry-go/v4"
 	"github.com/cockroachdb/pebble"
 	"github.com/go-chi/chi/v5"
-	"github.com/gogo/protobuf/sortkeys"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/go-github/v74/github"
+	"github.com/google/go-github/v86/github"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/kataras/hcaptcha"
 	"github.com/spf13/viper"
@@ -1155,7 +1156,8 @@ func (a *AutograderService) getSubmissionHistory(
 	if err != nil {
 		return nil, status.Error(codes.NotFound, "NOT_FOUND")
 	}
-	sort.Sort(sort.Reverse(sortkeys.Uint64Slice(subIds)))
+	// Newest first.
+	slices.SortFunc(subIds, func(a, b uint64) int { return cmp.Compare(b, a) })
 	for _, subId := range subIds {
 		sub, err := a.submissionRepo.GetSubmission(ctx, subId)
 		if err != nil {

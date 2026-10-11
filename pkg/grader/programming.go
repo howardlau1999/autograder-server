@@ -14,12 +14,11 @@ import (
 	autograder_grpc "autograder-server/pkg/grader/grpc"
 	grader_pb "autograder-server/pkg/grader/proto"
 	model_pb "autograder-server/pkg/model/proto"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -112,23 +111,28 @@ func truncateOutput(output string, maxLen int, prompt string) string {
 func (d *DockerProgrammingGrader) StreamLog(ctx context.Context, containerId string) (io.ReadCloser, error) {
 	r, err := d.cli.ContainerLogs(
 		ctx, containerId,
-		types.ContainerLogsOptions{Follow: true, Tail: "300", ShowStderr: true, ShowStdout: true},
+		client.ContainerLogsOptions{Follow: true, Tail: "300", ShowStderr: true, ShowStdout: true},
 	)
 	return r, err
 }
 
-func (d *DockerProgrammingGrader) PullImage(image string) error {
-	closer, err := d.cli.ImagePull(context.Background(), image, types.ImagePullOptions{})
+func (d *DockerProgrammingGrader) PullImage(imageRef string) error {
+	resp, err := d.cli.ImagePull(context.Background(), imageRef, client.ImagePullOptions{})
 	if err != nil {
 		return err
 	}
-	_, err = io.ReadAll(closer)
-	return err
+	defer resp.Close()
+	return resp.Wait(context.Background())
 }
 
-func (d *DockerProgrammingGrader) BuildImage(ctx context.Context, buildContext io.Reader, image string) error {
-	d.cli.ImageBuild(ctx, buildContext, types.ImageBuildOptions{Context: buildContext, Tags: []string{image}})
-	return nil
+func (d *DockerProgrammingGrader) BuildImage(ctx context.Context, buildContext io.Reader, imageRef string) error {
+	resp, err := d.cli.ImageBuild(ctx, buildContext, client.ImageBuildOptions{Tags: []string{imageRef}})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, err = io.Copy(io.Discard, resp.Body)
+	return err
 }
 
 // MaxOutputBytes caps how much grader output is forwarded to the hub.
@@ -158,8 +162,8 @@ func (d *DockerProgrammingGrader) runDocker(
 	logger := GetGraderLogger(ctx).With(zap.Uint64("submissionId", submissionId), zap.String("image", config.Image))
 	logger.Debug("Docker.Run.Enter")
 	defer logger.Debug("Docker.Run.Exit")
-	var pullProgress io.ReadCloser
-	pullProgress, err = d.cli.ImagePull(ctx, config.Image, types.ImagePullOptions{})
+	var pullProgress client.ImagePullResponse
+	pullProgress, err = d.cli.ImagePull(ctx, config.Image, client.ImagePullOptions{})
 	if err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
@@ -169,23 +173,29 @@ func (d *DockerProgrammingGrader) runDocker(
 		logger.Error("Docker.Run.PullImage", zap.Error(err))
 		return
 	}
-	pullProgressBuf := make([]byte, 32*1024)
-	var n int
-	for {
-		n, err = pullProgress.Read(pullProgressBuf)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			if ctx.Err() != nil {
-				err = ctx.Err()
-				return
-			}
-			internalError = ErrReadPullImageResponse
-			logger.Error("Docker.Run.PullImage.ReadAll", zap.Error(err))
+	// The pull endpoint answers 200 immediately and reports failures (unknown
+	// tag, registry auth, ...) as error messages inside the progress stream.
+	for msg, msgErr := range pullProgress.JSONMessages(ctx) {
+		if msgErr != nil {
+			err = msgErr
+			break
+		}
+		if msg.Error != nil {
+			internalError = ErrPullImage
+			err = msg.Error
+			logger.Error("Docker.Run.PullImage", zap.Error(err))
 			return
 		}
-		logger.Debug("Docker.Run.PullImage.Progress", zap.ByteString("progress", pullProgressBuf[:n]))
+		logger.Debug("Docker.Run.PullImage.Progress", zap.String("status", msg.Status), zap.String("id", msg.ID))
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			return
+		}
+		internalError = ErrReadPullImageResponse
+		logger.Error("Docker.Run.PullImage.ReadAll", zap.Error(err))
+		return
 	}
 	containerConfig := &container.Config{
 		Hostname:     "",
@@ -236,11 +246,14 @@ func (d *DockerProgrammingGrader) runDocker(
 	}
 	networkingConfig := &network.NetworkingConfig{}
 	platform := &specs.Platform{OS: "linux"}
-	var body container.ContainerCreateCreatedBody
-	body, err = d.cli.ContainerCreate(
-		ctx,
-		containerConfig, hostConfig, networkingConfig, platform, fmt.Sprintf("submission-%d", submissionId),
-	)
+	var body client.ContainerCreateResult
+	body, err = d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           containerConfig,
+		HostConfig:       hostConfig,
+		NetworkingConfig: networkingConfig,
+		Platform:         platform,
+		Name:             fmt.Sprintf("submission-%d", submissionId),
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
@@ -256,8 +269,9 @@ func (d *DockerProgrammingGrader) runDocker(
 	deleteCallback = func() { d.RemoveContainerBackground(logger, containerId) }
 	logger.Debug("Docker.Run.ContainerCreated")
 	containerIdCh <- containerId
-	doneC, errC := d.cli.ContainerWait(ctx, containerId, container.WaitConditionNextExit)
-	err = d.cli.ContainerStart(ctx, containerId, types.ContainerStartOptions{})
+	waitResult := d.cli.ContainerWait(ctx, containerId, client.ContainerWaitOptions{Condition: container.WaitConditionNextExit})
+	doneC, errC := waitResult.Result, waitResult.Error
+	_, err = d.cli.ContainerStart(ctx, containerId, client.ContainerStartOptions{})
 	if err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
@@ -296,14 +310,14 @@ func (d *DockerProgrammingGrader) runDocker(
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var containerDetail types.ContainerJSON
-	containerDetail, err = d.cli.ContainerInspect(ctx, containerId)
+	var containerDetail client.ContainerInspectResult
+	containerDetail, err = d.cli.ContainerInspect(ctx, containerId, client.ContainerInspectOptions{})
 	if err != nil {
 		internalError = ErrInspectContainer
 		logger.Error("Docker.Run.InspectContainer", zap.Error(err))
 		return
 	}
-	exitCode = int64(containerDetail.State.ExitCode)
+	exitCode = int64(containerDetail.Container.State.ExitCode)
 	return
 }
 
@@ -312,8 +326,8 @@ func (d *DockerProgrammingGrader) RemoveContainerBackground(logger *zap.Logger, 
 }
 
 func (d *DockerProgrammingGrader) RemoveContainer(ctx context.Context, logger *zap.Logger, containerId string) error {
-	if err := d.cli.ContainerRemove(
-		ctx, containerId, types.ContainerRemoveOptions{Force: true},
+	if _, err := d.cli.ContainerRemove(
+		ctx, containerId, client.ContainerRemoveOptions{Force: true},
 	); err != nil {
 		logger.Error("Docker.Run.RemoveContainer", zap.Error(err))
 		return err
@@ -427,7 +441,7 @@ func (d *DockerProgrammingGrader) GradeSubmission(
 WriteReport:
 	r, err := d.cli.ContainerLogs(
 		ctx, containerId,
-		types.ContainerLogsOptions{Follow: false, Tail: "300", ShowStderr: true, ShowStdout: true},
+		client.ContainerLogsOptions{Follow: false, Tail: "300", ShowStderr: true, ShowStdout: true},
 	)
 	if err == nil {
 		pr, pw := io.Pipe()
@@ -477,7 +491,7 @@ WriteReport:
 func NewDockerProgrammingGrader(concurrency int) (*DockerProgrammingGrader, error) {
 	mu := &sync.Mutex{}
 	cond := sync.NewCond(mu)
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, err
 	}

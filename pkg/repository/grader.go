@@ -61,7 +61,10 @@ func (gr *KVGraderRepository) GetAllMetadata(ctx context.Context, graderId uint6
 	prefixLen := len(prefix)
 	var keys [][]byte
 	var values [][]byte
-	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := gr.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return nil, nil, err
+	}
 	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
 		// Key/Value point into iterator-owned buffers that are reused on Next
@@ -82,7 +85,10 @@ func (gr *KVGraderRepository) getMetadataPrefix(graderId uint64) []byte {
 
 func (gr *KVGraderRepository) ClearRunning(ctx context.Context) {
 	prefix := []byte("running:")
-	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := gr.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return
+	}
 	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
 		gr.db.Delete(iter.Key(), pebble.Sync)
@@ -92,7 +98,10 @@ func (gr *KVGraderRepository) ClearRunning(ctx context.Context) {
 func (gr *KVGraderRepository) GetSubmissionsByGrader(ctx context.Context, graderId uint64) ([]uint64, error) {
 	prefix := gr.getGraderSubmissionPrefix(graderId)
 	prefixLen := len(prefix)
-	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := gr.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return nil, err
+	}
 	defer iter.Close()
 	var submissions []uint64
 	for iter.First(); iter.Valid(); iter.Next() {
@@ -110,7 +119,10 @@ func (gr *KVGraderRepository) GetSubmissionsByGrader(ctx context.Context, grader
 func (gr *KVGraderRepository) GetAllGraders(ctx context.Context) ([]uint64, []*model_pb.GraderStatusMetadata, error) {
 	prefix := gr.getGraderIdPrefix()
 	prefixLen := len(prefix)
-	iter := gr.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := gr.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return nil, nil, err
+	}
 	defer iter.Close()
 	var ids []uint64
 	var graders []*model_pb.GraderStatusMetadata

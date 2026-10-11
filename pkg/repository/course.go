@@ -34,7 +34,10 @@ type KVCourseRepository struct {
 func (cr *KVCourseRepository) GetAllCourses(ctx context.Context) ([]*model_pb.Course, []uint64, error) {
 	prefix := cr.getIdPrefix()
 	prefixLen := len(prefix)
-	iter := cr.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := cr.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return nil, nil, err
+	}
 	defer iter.Close()
 	var courses []*model_pb.Course
 	var ids []uint64
@@ -68,7 +71,10 @@ func (cr *KVCourseRepository) GetAssignmentsByCourse(ctx context.Context, course
 
 func (cr *KVCourseRepository) GetUsersByCourse(ctx context.Context, courseId uint64) ([]*model_pb.CourseMember, error) {
 	prefix := cr.getUserPrefix(courseId)
-	iter := cr.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := cr.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return nil, err
+	}
 	defer iter.Close()
 	var members []*model_pb.CourseMember
 	for iter.First(); iter.Valid(); iter.Next() {

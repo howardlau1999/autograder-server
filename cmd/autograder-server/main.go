@@ -35,7 +35,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httprate"
-	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
 	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
 	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
@@ -411,7 +410,7 @@ func main() {
 	)
 	grpc_zap.ReplaceGrpcLoggerV2(zapLogger)
 	autograderServer := grpc.NewServer(
-		grpc_middleware.WithUnaryServerChain(
+		grpc.ChainUnaryInterceptor(
 			grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
 			grpc_opentracing.UnaryServerInterceptor(),
 			grpc_prometheus.UnaryServerInterceptor,
@@ -419,7 +418,7 @@ func main() {
 			autograder_grpc.UnaryAuth(),
 			grpc_recovery.UnaryServerInterceptor(),
 		),
-		grpc_middleware.WithStreamServerChain(
+		grpc.ChainStreamInterceptor(
 			grpc_ctxtags.StreamServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
 			grpc_opentracing.StreamServerInterceptor(),
 			grpc_prometheus.StreamServerInterceptor,
@@ -441,7 +440,7 @@ func main() {
 	graderHubServer := grpc.NewServer(
 		grpc.KeepaliveEnforcementPolicy(kaep),
 		grpc.KeepaliveParams(ksap),
-		grpc_middleware.WithUnaryServerChain(
+		grpc.ChainUnaryInterceptor(
 			grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
 			grpc_opentracing.UnaryServerInterceptor(),
 			grpc_prometheus.UnaryServerInterceptor,
@@ -449,7 +448,7 @@ func main() {
 			graderHubService.UnaryAuthInterceptor(),
 			grpc_recovery.UnaryServerInterceptor(),
 		),
-		grpc_middleware.WithStreamServerChain(
+		grpc.ChainStreamInterceptor(
 			grpc_ctxtags.StreamServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
 			grpc_opentracing.StreamServerInterceptor(),
 			grpc_prometheus.StreamServerInterceptor,

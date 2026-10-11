@@ -40,7 +40,10 @@ func (sr *KVSubmissionReportRepository) DeleteUnfinishedSubmission(ctx context.C
 func (sr *KVSubmissionReportRepository) GetUnfinishedSubmissions(ctx context.Context) ([]UnfinishedSubmission, error) {
 	prefix := sr.getUnfinishedPrefix()
 	prefixLen := len(prefix)
-	iter := sr.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := sr.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return nil, err
+	}
 	var ids []UnfinishedSubmission
 	for iter.First(); iter.Valid(); iter.Next() {
 		ids = append(ids, UnfinishedSubmission{

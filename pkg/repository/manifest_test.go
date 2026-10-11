@@ -20,7 +20,10 @@ func TestMain(m *testing.M) {
 
 func iterAllManifestKeys(t *testing.T, db *pebble.DB) {
 
-	iter := db.NewIter(PrefixIterOptions([]byte("manifest:")))
+	iter, err := db.NewIter(PrefixIterOptions([]byte("manifest:")))
+	if err != nil {
+		t.Fatalf("failed to create iter: %v", err)
+	}
 	for iter.First(); iter.Valid(); iter.Next() {
 		t.Logf("%s", iter.Key())
 	}

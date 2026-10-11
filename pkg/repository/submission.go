@@ -31,7 +31,10 @@ func (sr *KVSubmissionRepository) GetSubmissionsByUserAndAssignment(ctx context.
 	prefix := sr.getUserAssignmentPrefix(userId, assignmentId)
 	prefixLen := len(prefix)
 	var submissions []uint64
-	iter := sr.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := sr.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return nil, err
+	}
 	for iter.First(); iter.Valid(); iter.Next() {
 		submissions = append(submissions, binary.BigEndian.Uint64(iter.Key()[prefixLen:]))
 	}

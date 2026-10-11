@@ -84,7 +84,11 @@ func (mr *KVManifestRepository) GarbageCollect(ctx context.Context, expired chan
 		}
 		prefix := mr.getMetadataPrefix()
 		prefixLen := len(prefix)
-		iter := mr.db.NewIter(PrefixIterOptions(prefix))
+		iter, err := mr.db.NewIter(PrefixIterOptions(prefix))
+		if err != nil {
+			zap.L().Error("Manifest.GC.NewIter", zap.Error(err))
+			continue
+		}
 		for iter.First(); iter.Valid(); iter.Next() {
 			manifestId := binary.BigEndian.Uint64(iter.Key()[prefixLen:])
 			logger := zap.L().With(zap.Uint64("manifestId", manifestId))
@@ -201,7 +205,10 @@ func (mr *KVManifestRepository) DeleteFileInManifest(ctx context.Context, filena
 
 func (mr *KVManifestRepository) GetFilesInManifest(ctx context.Context, id uint64) ([]string, error) {
 	prefix := mr.getFilesPrefix(id)
-	iter := mr.db.NewIter(PrefixIterOptions(prefix))
+	iter, err := mr.db.NewIter(PrefixIterOptions(prefix))
+	if err != nil {
+		return nil, err
+	}
 	var files []string
 	for iter.First(); iter.Valid(); iter.Next() {
 		files = append(files, string(iter.Key()[len(prefix):]))

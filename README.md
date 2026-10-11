@@ -11,7 +11,7 @@ For documentation, please head for [https://autograder-docs.howardlau.me](https:
 
 ## Build
 
-Go 1.26+ is needed for building the server (go.mod pins 1.26.6; newer Go
+Go 1.26+ is needed for building the server (go.mod pins the exact patch release; newer Go
 toolchains download it automatically).
 
 To build without client-side webpage code (which means you need a reverse-proxy like nginx to serve the static contents)
@@ -44,6 +44,19 @@ gofmt -l cmd pkg            # must print nothing
 go vet -tags containers_image_openpgp ./...
 go test -race -tags containers_image_openpgp ./...
 ```
+
+### Dependency notes
+
+- `github.com/cockroachdb/pebble` is kept on v1.1.x on purpose. Pebble v2 can only open stores
+  whose format major version is at least `FormatFlushableIngest`, so an existing data directory
+  has to be ratcheted first: run a v1.1 build with `db.RatchetFormatMajorVersion(pebble.FormatNewest)`
+  once (back up `data/` beforehand), then switch the import to `github.com/cockroachdb/pebble/v2`.
+- `github.com/grpc-ecosystem/go-grpc-middleware` stays on v1 (v2 is a different API) and
+  `github.com/improbable-eng/grpc-web` / `go-grpc-prometheus` are archived upstream but have no
+  known advisories; replacing them is a separate piece of work.
+- Docker is accessed through the split-out `github.com/moby/moby/client` SDK, not
+  `github.com/docker/docker`, so govulncheck no longer reports the daemon-only advisories of the
+  monolithic module.
 
 ## Configuration
 

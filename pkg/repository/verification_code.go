@@ -35,7 +35,11 @@ func (vr *KVVerificationCodeRepository) GarbageCollect(ctx context.Context) {
 		case <-ticker.C:
 		}
 		prefix := []byte("verification_code:")
-		iter := vr.db.NewIter(PrefixIterOptions(prefix))
+		iter, err := vr.db.NewIter(PrefixIterOptions(prefix))
+		if err != nil {
+			zap.L().Error("VerificationCode.GC.NewIter", zap.Error(err))
+			continue
+		}
 		for iter.First(); iter.Valid(); iter.Next() {
 			metadata := &model_pb.VerificationCodeMetadata{}
 			err := proto.Unmarshal(iter.Value(), metadata)
