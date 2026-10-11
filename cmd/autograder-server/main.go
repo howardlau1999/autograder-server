@@ -491,21 +491,21 @@ func main() {
 	router := chi.NewRouter()
 	router.Use(
 		clientIPMiddleware,
-		httprate.LimitBy(rateLimitRequests, rateLimitWindow, clientIPKey),
+		apiOnly(httprate.LimitBy(rateLimitRequests, rateLimitWindow, clientIPKey)),
 		chiMiddleware.Logger,
 		chiMiddleware.Recoverer,
 		middleware.NewGrpcWebMiddleware(wrappedGrpc).Handler,
 	)
 	router.Options(
-		"/AutograderService/FileUpload",
+		apiPathPrefix+"FileUpload",
 		corsHandler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP,
 	)
 	router.Post(
-		"/AutograderService/FileUpload",
+		apiPathPrefix+"FileUpload",
 		corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileUpload)).ServeHTTP,
 	)
 	router.Get(
-		"/AutograderService/FileDownload/{filename}",
+		apiPathPrefix+"FileDownload/{filename}",
 		corsHandler.Handler(http.HandlerFunc(autograderService.HandleFileDownload)).ServeHTTP,
 	)
 	if err := initEmbeddedStaticWebResources(router); err != nil {

@@ -24,27 +24,10 @@ jobs:
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          # govulncheck exits 3 when it finds vulnerabilities. The three
-          # remaining findings are docker-daemon bugs (authz bypass, plugin
-          # privilege check, firewalld reload) that the grader's docker
-          # *client* cannot reach, and two of them have no fixed release, so
-          # they are tolerated by GO ID. Anything new fails the job.
-          ALLOWED="GO-2026-4887 GO-2026-4883 GO-2025-3829"
-          rc=0
-          output=$(govulncheck -tags containers_image_openpgp ./... 2>&1) || rc=$?
-          # Print the findings without the "#N: file.go:line:col: ..." example
-          # traces, which GitHub would render as spurious error annotations.
-          echo "$output" | grep -vE '^[[:space:]]*#[0-9]+: |Example traces found:' || true
-          if [ "$rc" -eq 0 ]; then exit 0; fi
-          if [ "$rc" -ne 3 ]; then echo "govulncheck failed with exit code $rc"; exit "$rc"; fi
-          found=$(echo "$output" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u)
-          unexpected=$(echo "$found" | grep -vxE "$(echo "$ALLOWED" | tr ' ' '|')" || true)
-          if [ -n "$unexpected" ]; then
-            echo "Unexpected vulnerabilities (outside the tolerated docker-daemon set):"
-            echo "$unexpected"
-            exit 1
-          fi
-          echo "Only the tolerated docker-daemon findings remain; passing."
+          # Any reachable vulnerability fails the job. The docker-daemon
+          # findings that used to be tolerated here went away with the move
+          # to the github.com/moby/moby/client SDK.
+          govulncheck -tags containers_image_openpgp ./...
 
   check-web:
     runs-on: ubuntu-latest
@@ -54,20 +37,18 @@ jobs:
           submodules: 'recursive'
       - uses: actions/setup-node@v7
         with:
-          node-version: '18'
+          node-version: '24'
       - uses: actions/cache@v6
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
-      - run: cd web && npm install
+      - run: cd web && npm install && npm run install:vcd-stream
       - run: cd web && npx ng lint
-      # Advisory only until Angular is upgraded (the known advisories in
-      # Angular 13's dependency tree need a major-version bump). `|| true`
-      # keeps the step green so it does not mark the run with a red X.
-      - name: npm audit (advisory, production dependencies)
-        run: cd web && (npm audit --omit=dev || true)
+      - run: cd web && npx ng test --watch=false
+      - name: npm audit (production dependencies)
+        run: cd web && npm audit --omit=dev
 
   build-web:
     runs-on: ubuntu-latest
@@ -77,7 +58,7 @@ jobs:
           submodules: 'recursive'
       - uses: actions/setup-node@v7
         with:
-          node-version: '18'
+          node-version: '24'
       - uses: actions/cache@v6
         with:
           path: ~/.npm
@@ -97,7 +78,7 @@ jobs:
           path: pkg/web/dist
           key: autograder-web-${{ hashFiles('.web-version') }}
       - if: steps.cache-web.outputs.cache-hit != 'true'
-        run: npm install -g @angular/cli && cd web && npm install && npm install vcd-stream --ignore-scripts && ng build --output-path ../pkg/web/dist
+        run: cd web && npm install && npm run install:vcd-stream && npm run build:server
 
   build-server:
     runs-on: ubuntu-latest

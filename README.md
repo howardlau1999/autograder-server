@@ -26,16 +26,19 @@ To build the grader service
 go build -tags containers_image_openpgp -o autograder-grader ./cmd/autograder-grader
 ```
 
-To build with the client-side webpage code, Node.js 18+ is needed.
+To build with the client-side webpage code, Node.js 24 (or 22.22+) is needed.
 
 ```bash
-git submodule update --init 
-npm install -g @angular/cli
+git submodule update --init
 cd web
-npm install && npm install --no-save --ignore-scripts vcd-stream && ng build --output-path ../pkg/web/dist
+npm install && npm run install:vcd-stream && npm run build:server   # writes pkg/web/dist
 cd ..
 go build -tags containers_image_openpgp -o autograder-server ./cmd/autograder-server
 ```
+
+`install:vcd-stream` installs the (pinned) VCD waveform parser separately because its install
+script builds a native addon; `build:server` is `ng build` with the output laid out flat in
+`pkg/web/dist`, which is what `pkg/web/embed.go` embeds.
 
 ## Development checks
 
@@ -69,7 +72,8 @@ or `fs.http.token` is empty or still set to the placeholder from the template.
 Keys that need attention when deploying:
 
 - `server.trusted-proxy-count` — number of reverse-proxy hops (nginx, CDN, load balancer) in
-  front of the web port. With the default `0` the rate limiter keys on the socket address and
+  front of the web port. With the default `0` the rate limiter (API requests under
+  `/AutograderService/` only; static files are not counted) keys on the socket address and
   ignores `X-Forwarded-For`, so behind a proxy *all* users would share one bucket; set it to the
   real hop count there.
 - `cors.allowed-origins` — origins allowed to make cross-origin requests in production (in
