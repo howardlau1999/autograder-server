@@ -64,10 +64,10 @@ func (gr *KVGraderRepository) GetAllMetadata(ctx context.Context, graderId uint6
 	iter := gr.db.NewIter(PrefixIterOptions(prefix))
 	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := iter.Key()[prefixLen:]
-		value := iter.Value()
-		keys = append(keys, key)
-		values = append(values, value)
+		// Key/Value point into iterator-owned buffers that are reused on Next
+		// and released on Close, so they must be copied to outlive the loop.
+		keys = append(keys, append([]byte(nil), iter.Key()[prefixLen:]...))
+		values = append(values, append([]byte(nil), iter.Value()...))
 	}
 	return keys, values, nil
 }

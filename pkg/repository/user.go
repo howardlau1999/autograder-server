@@ -67,7 +67,7 @@ func (ur *KVUserRepository) GetUserIdByUsername(ctx context.Context, username st
 	if err != nil {
 		return 0, err
 	}
-	closer.Close()
+	defer closer.Close()
 	id := binary.BigEndian.Uint64(idBytes)
 	return id, nil
 }
@@ -282,7 +282,7 @@ func (ur *KVUserRepository) GetUserById(ctx context.Context, id uint64) (*model_
 	if err != nil {
 		return nil, err
 	}
-	closer.Close()
+	defer closer.Close()
 	user := &model_pb.User{}
 	err = proto.Unmarshal(raw, user)
 	if err != nil {

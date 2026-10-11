@@ -103,6 +103,9 @@ func (mr *KVManifestRepository) GarbageCollect(ctx context.Context, expired chan
 				select {
 				case expired <- manifestId:
 				case <-ctx.Done():
+					if err := iter.Close(); err != nil {
+						zap.L().Error("Manifest.GC.Close", zap.Error(err))
+					}
 					return
 				}
 			}
@@ -217,10 +220,7 @@ func (mr *KVManifestRepository) GetManifestMetadata(ctx context.Context, id uint
 	if err != nil {
 		return nil, err
 	}
-	err = closer.Close()
-	if err != nil {
-		return nil, err
-	}
+	defer closer.Close()
 	metadata := &model_pb.ManifestMetadata{}
 	err = proto.Unmarshal(raw, metadata)
 	if err != nil {
