@@ -248,6 +248,32 @@ func isDatabaseUninitialized(db *pebble.DB) bool {
 	return err == pebble.ErrNotFound
 }
 
+// contentSecurityPolicy is served with the embedded web client. The web XSS
+// root cause is fixed by sanitising rendered markdown, but a CSP is defence in
+// depth: it blocks injected inline scripts (there are none of our own now that
+// the server-provided values travel as meta tags), plugins, <base>/frame
+// injection and clickjacking. The allow-lists cover what the client actually
+// loads: same-origin bundles/KaTeX/Prism/xterm, the hCaptcha widget, the Google
+// Fonts mirror, WebAssembly (the VCD waveform parser) and blob workers (zip.js).
+const contentSecurityPolicy = "default-src 'self'; " +
+	"script-src 'self' 'wasm-unsafe-eval' blob: https://hcaptcha.com https://*.hcaptcha.com; " +
+	"style-src 'self' 'unsafe-inline' https://fonts.loli.net https://hcaptcha.com https://*.hcaptcha.com; " +
+	"font-src 'self' data: https://fonts.gstatic.com https://fonts.loli.net https://gstatic.loli.net; " +
+	"img-src 'self' data: blob:; " +
+	"connect-src 'self' https://hcaptcha.com https://*.hcaptcha.com; " +
+	"worker-src 'self' blob:; " +
+	"frame-src https://hcaptcha.com https://*.hcaptcha.com; " +
+	"object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+
+// setWebSecurityHeaders attaches the CSP and a few companion headers to a web
+// client response.
+func setWebSecurityHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Security-Policy", contentSecurityPolicy)
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+}
+
 func initEmbeddedStaticWebResources(router chi.Router) error {
 	distFS, err := fs.Sub(web.WebResources, "dist")
 	if err != nil {
@@ -278,6 +304,7 @@ func initEmbeddedStaticWebResources(router chi.Router) error {
 
 	router.Get(
 		"/*", func(w http.ResponseWriter, r *http.Request) {
+			setWebSecurityHeaders(w)
 			p := r.URL.Path
 			if len(r.URL.Path) > 1 {
 				p = r.URL.Path[1:]

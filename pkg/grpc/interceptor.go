@@ -8,7 +8,8 @@ import (
 	autograder_pb "autograder-server/pkg/api/proto"
 	"autograder-server/pkg/logging"
 	model_pb "autograder-server/pkg/model/proto"
-	"github.com/grpc-ecosystem/go-grpc-middleware/v2"
+
+	middleware "github.com/grpc-ecosystem/go-grpc-middleware/v2"
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -65,16 +66,16 @@ func (a *AutograderService) RequireCaptcha(ctx context.Context, req interface{})
 	r, ok := req.(IGetCaptcha)
 	if !ok {
 		l.Error("RequireCaptcha.NoGetCaptcha")
-		return nil, status.Error(codes.InvalidArgument, "NO_CAPTCHA")
+		return nil, status.Error(codes.InvalidArgument, CodeNoCaptcha)
 	}
 	captcha := r.GetCaptcha()
 	if captcha == "" {
-		return nil, status.Error(codes.InvalidArgument, "NO_CAPTCHA")
+		return nil, status.Error(codes.InvalidArgument, CodeNoCaptcha)
 	}
 	verifyResp := a.captchaVerifier.VerifyToken(captcha)
 	if !verifyResp.Success {
 		l.Debug("hCaptcha.Response", zap.Strings("error-codes", verifyResp.ErrorCodes))
-		return nil, status.Error(codes.InvalidArgument, "INVALID_CAPTCHA")
+		return nil, status.Error(codes.InvalidArgument, CodeInvalidCaptcha)
 	}
 	return ctx, nil
 }
@@ -86,12 +87,12 @@ func (a *AutograderService) RequireLogin(ctx context.Context, req interface{}) (
 	}
 	payload, err := a.parseTokenPayload(a.userJWTSignKey, token)
 	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "INVALID_TOKEN")
+		return nil, status.Error(codes.Unauthenticated, CodeInvalidToken)
 	}
 	payloadPB := &autograder_pb.UserTokenPayload{}
 	err = proto.Unmarshal(payload, payloadPB)
 	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "INVALID_TOKEN")
+		return nil, status.Error(codes.Unauthenticated, CodeInvalidToken)
 	}
 	ss, err := a.signPayloadToken(a.userJWTSignKey, payloadPB, time.Now().Add(UserTokenValidDuration))
 	if err == nil {
@@ -110,7 +111,7 @@ func (a *AutograderService) getCourseIdFromAssignmentId(ctx context.Context, ass
 ) {
 	assignment, err := a.assignmentRepo.GetAssignment(ctx, assignmentId)
 	if err != nil {
-		return 0, assignment, status.Error(codes.NotFound, "INVALID_ASSIGNMENT_ID")
+		return 0, assignment, status.Error(codes.NotFound, CodeInvalidAssignmentId)
 	}
 	return assignment.GetCourseId(), assignment, nil
 }
@@ -120,7 +121,7 @@ func (a *AutograderService) getAssignmentIdFromSubmissionId(ctx context.Context,
 ) {
 	submission, err := a.submissionRepo.GetSubmission(ctx, submissionId)
 	if err != nil {
-		return 0, submission, status.Error(codes.NotFound, "INVALID_SUBMISSION_ID")
+		return 0, submission, status.Error(codes.NotFound, CodeInvalidSubmissionId)
 	}
 	return submission.GetAssignmentId(), submission, nil
 }
@@ -151,7 +152,7 @@ func (a *AutograderService) GetCourseId(ctx context.Context, req interface{}) (c
 		ctx = context.WithValue(ctx, assignmentCtxKey{}, assignment)
 	}
 	if courseId == 0 {
-		return nil, status.Error(codes.InvalidArgument, "MISSING_COURSE_ID")
+		return nil, status.Error(codes.InvalidArgument, CodeMissingCourseId)
 	}
 	return context.WithValue(ctx, courseIdCtxKey{}, courseId), nil
 }
@@ -162,7 +163,7 @@ func (a *AutograderService) RequireInCourse(ctx context.Context, req interface{}
 	userId := user.GetUserId()
 	member := a.userRepo.GetCourseMember(ctx, userId, courseId)
 	if member == nil {
-		return nil, status.Error(codes.PermissionDenied, "NOT_IN_COURSE")
+		return nil, status.Error(codes.PermissionDenied, CodeNotInCourse)
 	}
 	return context.WithValue(ctx, courseMemberCtxKey{}, member), nil
 }
@@ -170,7 +171,7 @@ func (a *AutograderService) RequireInCourse(ctx context.Context, req interface{}
 func (a *AutograderService) RequireAdmin(ctx context.Context, req interface{}) (context.Context, error) {
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	if !user.IsAdmin {
-		return nil, status.Error(codes.PermissionDenied, "NOT_ADMIN")
+		return nil, status.Error(codes.PermissionDenied, CodeNotAdmin)
 	}
 	return ctx, nil
 }
@@ -179,14 +180,14 @@ func (a *AutograderService) CheckManifest(ctx context.Context, req interface{}) 
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	manifestReq, ok := req.(IGetManifestId)
 	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "MANIFEST_ID")
+		return nil, status.Error(codes.InvalidArgument, CodeManifestId)
 	}
 	manifest, err := a.manifestRepo.GetManifest(ctx, manifestReq.GetManifestId())
 	if err != nil {
-		return nil, status.Error(codes.DeadlineExceeded, "MANIFEST_EXPIRED")
+		return nil, status.Error(codes.DeadlineExceeded, CodeManifestExpired)
 	}
 	if manifest.GetUserId() != user.GetUserId() {
-		return nil, status.Error(codes.PermissionDenied, "WRONG_USER")
+		return nil, status.Error(codes.PermissionDenied, CodeWrongUser)
 	}
 	return ctx, nil
 }
@@ -194,7 +195,7 @@ func (a *AutograderService) CheckManifest(ctx context.Context, req interface{}) 
 func (a *AutograderService) RequireCourseWrite(ctx context.Context, req interface{}) (context.Context, error) {
 	member := ctx.Value(courseMemberCtxKey{}).(*model_pb.CourseMember)
 	if member.GetRole() == model_pb.CourseRole_Reader || member.GetRole() == model_pb.CourseRole_Student {
-		return nil, status.Error(codes.PermissionDenied, "ROLE_UNAUTHORIZED")
+		return nil, status.Error(codes.PermissionDenied, CodeRoleUnauthorized)
 	}
 	return ctx, nil
 }
@@ -202,7 +203,7 @@ func (a *AutograderService) RequireCourseWrite(ctx context.Context, req interfac
 func (a *AutograderService) RequireSubmissionRead(ctx context.Context, req interface{}) (context.Context, error) {
 	submission, ok := ctx.Value(submissionCtxKey{}).(*model_pb.Submission)
 	if !ok {
-		return nil, status.Error(codes.PermissionDenied, "SUBMISSION_UNAUTHORIZED")
+		return nil, status.Error(codes.PermissionDenied, CodeSubmissionUnauthorized)
 	}
 	user := ctx.Value(userInfoCtxKey{}).(*autograder_pb.UserTokenPayload)
 	for _, submitter := range submission.GetSubmitters() {
@@ -214,7 +215,7 @@ func (a *AutograderService) RequireSubmissionRead(ctx context.Context, req inter
 	if member.GetRole() == model_pb.CourseRole_TA || member.GetRole() == model_pb.CourseRole_Instructor {
 		return ctx, nil
 	}
-	return nil, status.Error(codes.PermissionDenied, "SUBMISSION_UNAUTHORIZED")
+	return nil, status.Error(codes.PermissionDenied, CodeSubmissionUnauthorized)
 }
 
 func (a *AutograderService) NotAfterDueDate(ctx context.Context, req interface{}) (context.Context, error) {
@@ -225,10 +226,10 @@ func (a *AutograderService) NotAfterDueDate(ctx context.Context, req interface{}
 	assignment := ctx.Value(assignmentCtxKey{}).(*model_pb.Assignment)
 	now := time.Now()
 	if now.After(assignment.GetDueDate().AsTime()) {
-		return ctx, status.Error(codes.PermissionDenied, "AFTER_DUE_DATE")
+		return ctx, status.Error(codes.PermissionDenied, CodeAfterDueDate)
 	}
 	if now.Before(assignment.GetReleaseDate().AsTime()) {
-		return ctx, status.Error(codes.PermissionDenied, "BEFORE_RELEASE_DATE")
+		return ctx, status.Error(codes.PermissionDenied, CodeBeforeReleaseDate)
 	}
 	return ctx, nil
 }
@@ -371,7 +372,7 @@ func (a *AutograderService) AuthFunc(ctx context.Context, req interface{}, fullM
 ) {
 	authFuncs := a.authFuncs[fullMethodName]
 	if authFuncs == nil {
-		return ctx, status.Error(codes.NotFound, "METHOD_AUTH")
+		return ctx, status.Error(codes.NotFound, CodeMethodAuth)
 	}
 	var err error
 	for _, authFunc := range authFuncs {
