@@ -24,6 +24,45 @@ func openTestDB(t *testing.T) *pebble.DB {
 	return db
 }
 
+func TestGetMetadataReturnsStableCopy(t *testing.T) {
+	// With no block cache, closing Get's closer releases its SST block. Race
+	// builds poison the freed block, making borrowed return values fail here.
+	cache := pebble.NewCache(0)
+	defer cache.Unref()
+	db, err := pebble.Open("metadata-test", &pebble.Options{Cache: cache, FS: vfs.NewMem()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	repo, err := NewKVGraderRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	want := bytes.Repeat([]byte("value"), 400)
+	for i := 0; i < 32; i++ {
+		if err := repo.PutMetadata(ctx, 1, []byte(fmt.Sprint(i)), want); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 32; i++ {
+		got, err := repo.GetMetadata(ctx, 1, []byte(fmt.Sprint(i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("metadata %d changed after GetMetadata released its database value", i)
+		}
+	}
+}
+
 // GetAllMetadata returns slices that outlive the iterator it reads them from,
 // so the entries must be copies rather than views into pebble's buffers.
 func TestGetAllMetadataReturnsStableCopies(t *testing.T) {

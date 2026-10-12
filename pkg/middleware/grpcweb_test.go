@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -201,6 +202,92 @@ func TestGrpcWebUnaryErrorIsTrailersOnly(t *testing.T) {
 	}
 	if body := readAll(t, resp.Body); len(body) != 0 {
 		t.Errorf("trailers-only response has a body: %x", body)
+	}
+}
+
+func TestGrpcWebTrailersOnlyPreservesMetadata(t *testing.T) {
+	setMetadata := func(ctx context.Context) error {
+		if err := grpc.SetHeader(ctx, metadata.Pairs("x-shared", "header")); err != nil {
+			return err
+		}
+		return grpc.SetTrailer(ctx, metadata.Pairs(
+			"retry-after", "60",
+			"x-shared", "trailer-1", "x-shared", "trailer-2",
+			"opaque-bin", "\x00\xff\x01",
+		))
+	}
+	desc := grpc.ServiceDesc{
+		ServiceName: "test.Trailers",
+		HandlerType: (*any)(nil),
+		Methods: []grpc.MethodDesc{{
+			MethodName: "Error",
+			Handler: func(_ any, ctx context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+				if err := dec(&wrapperspb.StringValue{}); err != nil {
+					return nil, err
+				}
+				if err := setMetadata(ctx); err != nil {
+					return nil, err
+				}
+				return nil, status.Error(codes.ResourceExhausted, "RETRY_LATER")
+			},
+		}},
+		Streams: []grpc.StreamDesc{{
+			StreamName:    "Empty",
+			ServerStreams: true,
+			Handler: func(_ any, stream grpc.ServerStream) error {
+				if err := stream.RecvMsg(&wrapperspb.StringValue{}); err != nil {
+					return err
+				}
+				return setMetadata(stream.Context())
+			},
+		}},
+	}
+	server := grpc.NewServer()
+	server.RegisterService(&desc, nil)
+	t.Cleanup(server.Stop)
+	bridge := NewGrpcWeb(server, func(origin string) bool { return origin == "https://allowed.example" })
+	srv := httptest.NewServer(bridge.Handler(http.NotFoundHandler()))
+	t.Cleanup(srv.Close)
+	for _, contentType := range []string{"application/grpc-web+proto", "application/grpc-web-text+proto"} {
+		for _, method := range []string{"Error", "Empty"} {
+			t.Run(contentType+"/"+method, func(t *testing.T) {
+				body := encodeFrame(t, wrapperspb.String("test"))
+				if strings.HasPrefix(contentType, grpcWebTextContentType) {
+					body = []byte(base64.StdEncoding.EncodeToString(body))
+				}
+				resp := call(t, srv, "/test.Trailers/"+method, contentType, body,
+					map[string]string{"Origin": "https://allowed.example"})
+				code, message := codes.OK, ""
+				if method == "Error" {
+					code, message = codes.ResourceExhausted, "RETRY_LATER"
+				}
+				if resp.StatusCode != http.StatusOK || resp.Header.Get("Grpc-Status") != fmt.Sprint(int(code)) || resp.Header.Get("Grpc-Message") != message {
+					t.Errorf("unexpected status: HTTP %d, headers %v", resp.StatusCode, resp.Header)
+				}
+				for key, want := range map[string]string{
+					"Content-Type":                contentType,
+					"Retry-After":                 "60",
+					"Opaque-Bin":                  base64.StdEncoding.EncodeToString([]byte{0, 255, 1}),
+					"Access-Control-Allow-Origin": "https://allowed.example",
+				} {
+					if got := resp.Header.Get(key); got != want {
+						t.Errorf("%s = %q, want %q", key, got, want)
+					}
+				}
+				if got := resp.Header.Values("X-Shared"); !slices.Equal(got, []string{"header", "trailer-1", "trailer-2"}) {
+					t.Errorf("shared metadata = %q", got)
+				}
+				exposed := strings.Split(resp.Header.Get("Access-Control-Expose-Headers"), ", ")
+				for _, name := range []string{"retry-after", "x-shared", "opaque-bin"} {
+					if !slices.Contains(exposed, name) {
+						t.Errorf("custom metadata %q is not exposed to CORS clients", name)
+					}
+				}
+				if body := readAll(t, resp.Body); len(body) != 0 {
+					t.Errorf("trailers-only response has a body: %x", body)
+				}
+			})
+		}
 	}
 }
 

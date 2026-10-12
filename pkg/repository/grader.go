@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -53,7 +54,8 @@ func (gr *KVGraderRepository) GetMetadata(ctx context.Context, graderId uint64, 
 		return nil, err
 	}
 	defer closer.Close()
-	return value, nil
+	// Get's bytes are owned by Pebble and expire when closer is closed.
+	return bytes.Clone(value), nil
 }
 
 func (gr *KVGraderRepository) GetAllMetadata(ctx context.Context, graderId uint64) ([][]byte, [][]byte, error) {

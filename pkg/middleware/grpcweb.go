@@ -195,6 +195,19 @@ func (rw *responseWriter) flush() {
 // frame after the messages.
 func (rw *responseWriter) finish() {
 	if !rw.wroteHeader {
+		// grpc-go prefixes custom trailers even when no headers or messages
+		// were sent. In a trailers-only response they belong in the initial
+		// headers too, where WriteHeader also exposes them to CORS clients.
+		for key, values := range rw.header {
+			if !strings.HasPrefix(key, http.TrailerPrefix) {
+				continue
+			}
+			name := strings.TrimPrefix(key, http.TrailerPrefix)
+			for _, value := range values {
+				rw.header.Add(name, value)
+			}
+			delete(rw.header, key)
+		}
 		rw.WriteHeader(http.StatusOK)
 		rw.flush()
 		return

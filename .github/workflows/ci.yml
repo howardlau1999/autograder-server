@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: 'recursive'
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -82,7 +84,7 @@ jobs:
 
   build-server:
     runs-on: ubuntu-latest
-    needs: [check, build-web]
+    needs: [check, check-web, build-web]
     # Needed by `gh release upload` when the workflow is triggered by a
     # release; the other jobs keep the repository default permissions.
     permissions:
@@ -119,6 +121,9 @@ jobs:
           key: ${{ matrix.GOOS }}-${{ matrix.GOARCH }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ matrix.GOOS }}-${{ matrix.GOARCH }}-go-
+      - name: Validate embedded web config
+        if: matrix.GOOS == 'linux' && matrix.GOARCH == 'amd64'
+        run: test -f pkg/web/dist/index.html && go test ./cmd/autograder-server -run '^TestEmbeddedWebIndexRendersConfig$'
       - run: CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} GOARCH=${{ matrix.GOARCH }} go build -tags containers_image_openpgp -ldflags '-extldflags "-static"' -o autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }} ./cmd/autograder-server
       - run: CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} GOARCH=${{ matrix.GOARCH }} go build -tags containers_image_openpgp -ldflags '-extldflags "-static"' -o autograder-grader-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }} ./cmd/autograder-grader
       - run: tar zcvf autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz autograder-server-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }} autograder-grader-${{ matrix.GOOS }}-${{ matrix.GOARCH }}${{ matrix.ext }}

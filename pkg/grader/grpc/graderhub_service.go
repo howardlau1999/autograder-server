@@ -121,7 +121,7 @@ type GraderHubService struct {
 	logStreamMu *sync.Mutex
 
 	queuedMu        *sync.Mutex
-	schedulerCond   *sync.Cond
+	schedulerWake   chan struct{}
 	queuedListIndex map[uint64]*list.Element
 	queuedList      *list.List
 
@@ -165,7 +165,7 @@ func (g *GraderHubService) pushPendingGradeQueue(request *grader_pb.GradeRequest
 	g.onPendingRankChanged(request.SubmissionId, g.queuedList.Len()+1, g.queuedList.Len()+1)
 	elem := g.queuedList.PushBack(pending)
 	g.queuedListIndex[request.SubmissionId] = elem
-	g.schedulerCond.Broadcast()
+	g.wakeScheduler()
 	return elem
 }
 
@@ -572,28 +572,36 @@ func (g *GraderHubService) onPendingRankChanged(submissionId uint64, newRank int
 func (g *GraderHubService) scheduler() {
 	zap.L().Debug("GraderHub.Scheduler.Start")
 	defer zap.L().Debug("GraderHub.Scheduler.Exit")
-	g.queuedMu.Lock()
-	defer g.queuedMu.Unlock()
 	for {
-		for g.queuedList.Len() == 0 {
-			if g.ctx.Err() != nil {
-				return
-			}
-			g.schedulerCond.Wait()
+		g.queuedMu.Lock()
+		if g.ctx.Err() != nil {
+			g.queuedMu.Unlock()
+			return
 		}
+		progressed := g.queuedList.Len() > 0 && g.schedulePass()
+		g.queuedMu.Unlock()
+		if progressed {
+			continue
+		}
+		// Producers update capacity/outboxes under different locks. Retain a
+		// notification that arrives during the pass so a stale snapshot can
+		// never make us sleep through newly available capacity.
 		select {
 		case <-g.ctx.Done():
 			return
-		default:
+		case <-g.schedulerWake:
 		}
-		if !g.schedulePass() {
-			// Nothing could be placed (no grader online, all at capacity, or
-			// no tag match). Sleep until something changes: a new request, a
-			// grader (re)connecting, or a running submission finishing, all of
-			// which broadcast schedulerCond. Spinning here would burn CPU and
-			// hammer the DB for as long as the backlog persists.
-			g.schedulerCond.Wait()
-		}
+	}
+}
+
+// wakeScheduler is called after a change that may make queued work runnable.
+// One pending notification is enough: each pass rechecks all pending work.
+// Sending never blocks, so producers do not need to acquire queuedMu while
+// holding their own state locks.
+func (g *GraderHubService) wakeScheduler() {
+	select {
+	case g.schedulerWake <- struct{}{}:
+	default:
 	}
 }
 
@@ -615,35 +623,41 @@ func (g *GraderHubService) schedulePass() bool {
 	for cur := g.queuedList.Front(); cur != nil; {
 		pending := cur.Value.(*PendingRequest)
 		cur = cur.Next()
-		graderId := g.pickGrader(pending.request, loads)
-		if graderId == 0 {
-			continue
-		}
-		g.gradeRequestMu.Lock()
-		queue := g.gradeRequestQueues[graderId]
-		g.gradeRequestMu.Unlock()
-		if queue == nil {
-			// Registered but its heartbeat stream is not up yet.
-			continue
-		}
-		// Claim before pushing: the grader may start reporting the instant it
-		// receives the request, and GradeCallback only accepts reports from
-		// the grader that holds the claim.
-		g.runningMu.Lock()
-		g.runningList[pending.request.SubmissionId] = pending.request
-		g.runningMu.Unlock()
-		g.onSubmissionScheduled(pending.request.SubmissionId, graderId)
-		if !queue.Push(pending.request) {
-			// The grader went away between the snapshot and now; leave the
-			// request pending for the next pass.
+		for {
+			graderId := g.pickGrader(pending.request, loads)
+			if graderId == 0 {
+				break
+			}
+			g.gradeRequestMu.Lock()
+			queue := g.gradeRequestQueues[graderId]
+			g.gradeRequestMu.Unlock()
+			if queue == nil {
+				// A registration without a heartbeat outbox must not prevent
+				// another eligible grader from taking this same submission.
+				delete(loads, graderId)
+				continue
+			}
+			// Claim before pushing: the grader may start reporting the instant it
+			// receives the request, and GradeCallback only accepts reports from
+			// the grader that holds the claim.
 			g.runningMu.Lock()
-			delete(g.runningList, pending.request.SubmissionId)
+			g.runningList[pending.request.SubmissionId] = pending.request
 			g.runningMu.Unlock()
-			_ = g.graderRepo.ReleaseSubmission(context.Background(), pending.request.SubmissionId)
-			continue
+			g.onSubmissionScheduled(pending.request.SubmissionId, graderId)
+			if !queue.Push(pending.request) {
+				// The grader went away between the snapshot and now. Undo its
+				// claim and try the other candidates in this pass.
+				g.runningMu.Lock()
+				delete(g.runningList, pending.request.SubmissionId)
+				g.runningMu.Unlock()
+				_ = g.graderRepo.ReleaseSubmission(context.Background(), pending.request.SubmissionId)
+				delete(loads, graderId)
+				continue
+			}
+			g.removePendingGradeRequest(pending.request.SubmissionId)
+			progressed = true
+			break
 		}
-		g.removePendingGradeRequest(pending.request.SubmissionId)
-		progressed = true
 	}
 	return progressed
 }
@@ -694,7 +708,7 @@ func (g *GraderHubService) GraderHeartbeat(server grader_pb.GraderHubService_Gra
 
 	go g.graderRequestSendLoop(server, graderId, queue)
 	// The scheduler may have a chance to schedule a grade task now
-	g.schedulerCond.Broadcast()
+	g.wakeScheduler()
 
 	var tCh chan *time.Time
 	g.monitorMu.Lock()
@@ -763,7 +777,7 @@ func (g *GraderHubService) onSubmissionFinished(submissionId uint64) {
 	g.runningMu.Lock()
 	delete(g.runningList, submissionId)
 	g.runningMu.Unlock()
-	g.schedulerCond.Broadcast()
+	g.wakeScheduler()
 }
 
 func (g *GraderHubService) onSubmissionCancelled(submissionId uint64) {
@@ -1012,6 +1026,7 @@ func NewGraderHubService(
 		gradeRequestMu:       &sync.Mutex{},
 		subsMu:               &sync.Mutex{},
 		queuedMu:             &sync.Mutex{},
+		schedulerWake:        make(chan struct{}, 1),
 		runningMu:            &sync.Mutex{},
 		logStreamMu:          &sync.Mutex{},
 		logStreams:           map[uint64]map[string]*ClientLogStream{},
@@ -1027,7 +1042,6 @@ func NewGraderHubService(
 		ctx:                  ctx,
 		cancel:               cancel,
 	}
-	svc.schedulerCond = sync.NewCond(svc.queuedMu)
 	ids, graders, err := gr.GetAllGraders(ctx)
 	if err != nil {
 		cancel()
@@ -1056,7 +1070,8 @@ func NewGraderHubService(
 // underlying database.
 func (g *GraderHubService) Close() {
 	g.cancel()
+	// Wait for an in-progress scheduling pass before the caller can close
+	// the database. The scheduler checks ctx while holding this same lock.
 	g.queuedMu.Lock()
-	g.schedulerCond.Broadcast()
 	g.queuedMu.Unlock()
 }

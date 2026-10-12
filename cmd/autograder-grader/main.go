@@ -192,12 +192,6 @@ func (b *ReportBuffer) Close() {
 	b.cond.Broadcast()
 }
 
-func (b *ReportBuffer) isClosed() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.closed
-}
-
 // waitAndDrain blocks until at least one report is buffered, the buffer is
 // closed, or timeout elapses. open=false means the buffer is closed and empty;
 // timedOut=true means there is nothing to send yet but the caller should probe
@@ -405,15 +399,15 @@ func (g *GraderWorker) submissionReporter(submissionId uint64, buffer *ReportBuf
 			logger.Error("Grader.FS.Remove", zap.String("file", runPath), zap.Error(err))
 		}
 	}(fmt.Sprintf("runs/submissions/%d", submissionId))
-	for !buffer.isClosed() || len(reports) > 0 {
+	// Only reportSession can decide that the closed buffer has been drained
+	// and the stream completed. Closed buffers may still contain reports,
+	// including ones produced before this goroutine starts or while reconnecting.
+	for {
 		retry, err := g.reportSession(submissionId, buffer, &reports, logger)
 		if err != nil {
 			logger.Error("Grader.SubmissionReporter", zap.Error(err))
 		}
 		if !retry {
-			return
-		}
-		if buffer.isClosed() && len(reports) == 0 {
 			return
 		}
 		time.Sleep(1 * time.Second)

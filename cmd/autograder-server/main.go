@@ -251,7 +251,7 @@ func isDatabaseUninitialized(db *pebble.DB) bool {
 // contentSecurityPolicy is served with the embedded web client. The web XSS
 // root cause is fixed by sanitising rendered markdown, but a CSP is defence in
 // depth: it blocks injected inline scripts (there are none of our own now that
-// the server-provided values travel as meta tags), plugins, <base>/frame
+// the server-provided values travel as JSON data), plugins, <base>/frame
 // injection and clickjacking. The allow-lists cover what the client actually
 // loads: same-origin bundles/KaTeX/Prism/xterm, the hCaptcha widget, the Google
 // Fonts mirror, WebAssembly (the VCD waveform parser) and blob workers (zip.js).
@@ -259,7 +259,7 @@ const contentSecurityPolicy = "default-src 'self'; " +
 	"script-src 'self' 'wasm-unsafe-eval' blob: https://hcaptcha.com https://*.hcaptcha.com; " +
 	"style-src 'self' 'unsafe-inline' https://fonts.loli.net https://hcaptcha.com https://*.hcaptcha.com; " +
 	"font-src 'self' data: https://fonts.gstatic.com https://fonts.loli.net https://gstatic.loli.net; " +
-	"img-src 'self' data: blob:; " +
+	"img-src 'self' https: data: blob:; " +
 	"connect-src 'self' https://hcaptcha.com https://*.hcaptcha.com; " +
 	"worker-src 'self' blob:; " +
 	"frame-src https://hcaptcha.com https://*.hcaptcha.com; " +
@@ -284,41 +284,41 @@ func initEmbeddedStaticWebResources(router chi.Router) error {
 		HcaptchaSiteKey: viper.GetString("hcaptcha.site-key"),
 		GithubClientId:  viper.GetString("github.client-id"),
 	}
-	tmpl, err := template.ParseFS(distFS, "index.html")
-	var writeTemplate func(w http.ResponseWriter, r *http.Request)
-	if err == nil {
-		rendered := &bytes.Buffer{}
-		if err = tmpl.Execute(rendered, providedTokens); err != nil {
-			zap.L().Error("Web.Template.Execute", zap.Error(err))
-		} else {
-			indexHTML := rendered.Bytes()
-			writeTemplate = func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write(indexHTML)
-			}
+	return initStaticWebResources(router, distFS, providedTokens)
+}
+
+func initStaticWebResources(router chi.Router, distFS fs.FS, providedTokens *ServerProvidedTokens) error {
+	indexTemplate, err := fs.ReadFile(distFS, "index.html")
+	var indexHTML []byte
+	switch {
+	case err == nil:
+		tmpl, err := template.New("index.html").Parse(string(indexTemplate))
+		if err != nil {
+			return fmt.Errorf("parse web index: %w", err)
 		}
-	} else {
-		zap.L().Warn("Web.Template.Parse", zap.Error(err))
+		var rendered bytes.Buffer
+		if err := tmpl.Execute(&rendered, providedTokens); err != nil {
+			return fmt.Errorf("render web index: %w", err)
+		}
+		indexHTML = rendered.Bytes()
+	case errors.Is(err, fs.ErrNotExist):
+		// Server-only builds deliberately embed no index.html.
+	default:
+		return fmt.Errorf("read web index: %w", err)
 	}
 	fsrv := http.FileServer(http.FS(distFS))
 
 	router.Get(
 		"/*", func(w http.ResponseWriter, r *http.Request) {
 			setWebSecurityHeaders(w)
-			p := r.URL.Path
-			if len(r.URL.Path) > 1 {
-				p = r.URL.Path[1:]
+			p := strings.TrimPrefix(r.URL.Path, "/")
+			_, err := fs.Stat(distFS, p)
+			if indexHTML != nil && (p == "" || p == "index.html" || errors.Is(err, fs.ErrNotExist)) {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, _ = w.Write(indexHTML)
+				return
 			}
-			_, err := distFS.Open(p)
-			if err != nil {
-				if writeTemplate != nil {
-					writeTemplate(w, r)
-					return
-				}
-				http.StripPrefix(r.URL.Path, fsrv).ServeHTTP(w, r)
-			} else {
-				fsrv.ServeHTTP(w, r)
-			}
+			fsrv.ServeHTTP(w, r)
 		},
 	)
 	return nil
